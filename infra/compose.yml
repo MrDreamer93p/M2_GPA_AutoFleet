@@ -1,0 +1,39 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: autofleet-mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  backend:
+    image: python:3.11-slim
+    container_name: autofleet-backend
+    restart: unless-stopped
+    working_dir: /app
+    command: sh -c "pip install --no-cache-dir -r requirements.txt && uvicorn main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    environment:
+      - AUTOFLEET_MQTT_HOST=mosquitto
+      - AUTOFLEET_MQTT_PORT=1883
+      - AUTOFLEET_LOG_DIR=/app_data/logs
+      - AUTOFLEET_RESULT_DIR=/app_data/results
+    volumes:
+      - ../backend:/app:rw
+      - ../data:/app_data:rw
+    depends_on:
+      - mosquitto
+
+  frontend:
+    image: python:3.11-slim
+    container_name: autofleet-frontend
+    restart: unless-stopped
+    working_dir: /site
+    command: sh -c "python -m http.server 3000 --bind 0.0.0.0"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../frontend:/site:ro

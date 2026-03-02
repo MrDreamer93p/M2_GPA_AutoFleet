@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoFleet Control MVP</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="layout">
+    <section class="panel">
+      <h1>AutoFleet Control</h1>
+      <p class="hint">Protocol stack: REST + MQTT (RTSP reserved in telemetry fields)</p>
+      <button id="refreshBtn">Refresh Robots</button>
+      <table>
+        <thead>
+          <tr>
+            <th>Robot</th>
+            <th>Online</th>
+            <th>State</th>
+            <th>Battery</th>
+            <th>Last Seen(s)</th>
+            <th>RTSP</th>
+          </tr>
+        </thead>
+        <tbody id="robotTable"></tbody>
+      </table>
+    </section>
+
+    <section class="panel">
+      <h2>Single Command</h2>
+      <label>Robot ID <input id="robotId" value="R1"></label>
+      <label>Command Type <input id="commandType" value="SET_MODE"></label>
+      <label>Args(JSON)</label>
+      <textarea id="commandArgs" rows="5">{"mode":"AUTO"}</textarea>
+      <button id="sendCmdBtn">Send Command</button>
+    </section>
+
+    <section class="panel">
+      <h2>Mission</h2>
+      <label>Mission ID <input id="missionId" value="m-demo-001"></label>
+      <label>Robots(comma separated) <input id="missionRobots" value="R1,R2,R3"></label>
+      <button id="startMissionBtn">Start Mission</button>
+      <button id="returnMissionBtn">Return Mission</button>
+      <button id="stopMissionBtn">Stop Mission</button>
+    </section>
+
+    <section class="panel">
+      <h2>Output</h2>
+      <pre id="output"></pre>
+    </section>
+  </main>
+  <script src="./app.js"></script>
+</body>
+</html>
