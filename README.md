@@ -29,7 +29,7 @@ docker compose up -d
 
 ```bash
 pip install paho-mqtt
-python tools/robot_sim.py --host 127.0.0.1 --port 1883 --robots R1,R2,R3
+python tools/robot_sim.py --host 127.0.0.1 --port 3889 --robots R1,R2,R3
 ```
 
 3. Open control panel:
@@ -46,6 +46,10 @@ python tools/robot_sim.py --host 127.0.0.1 --port 1883 --robots R1,R2,R3
 - `GET /api/v1/robots`
 - `GET /api/v1/robots/{robot_id}/latest`
 - `POST /api/v1/robots/{robot_id}/command`
+- `POST /api/v1/teleop/{robot_id}`
+- `GET /api/v1/formation`
+- `POST /api/v1/formation/follow/start`
+- `POST /api/v1/formation/follow/stop`
 - `POST /api/v1/missions/start`
 - `POST /api/v1/missions/{mission_id}/return`
 - `POST /api/v1/missions/{mission_id}/stop`

@@ -4,7 +4,7 @@ services:
     container_name: autofleet-mosquitto
     restart: unless-stopped
     ports:
-      - "1883:1883"
+      - "3889:3889"
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
 
@@ -18,7 +18,7 @@ services:
       - "8000:8000"
     environment:
       - AUTOFLEET_MQTT_HOST=mosquitto
-      - AUTOFLEET_MQTT_PORT=1883
+      - AUTOFLEET_MQTT_PORT=3889
       - AUTOFLEET_LOG_DIR=/app_data/logs
       - AUTOFLEET_RESULT_DIR=/app_data/results
     volumes:

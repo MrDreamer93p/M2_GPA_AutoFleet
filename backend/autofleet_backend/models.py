@@ -29,6 +29,12 @@ class CommandRequest(BaseModel):
     ttl_ms: int = 2_000
 
 
+class TeleopRequest(BaseModel):
+    linear_x: float = Field(default=0.0, ge=-1.0, le=1.0)
+    angular_z: float = Field(default=0.0, ge=-1.0, le=1.0)
+    ttl_ms: int = 300
+
+
 class CommandEnvelope(BaseModel):
     v: int = 1
     cmd_id: str
@@ -61,3 +67,15 @@ class MissionState(BaseModel):
     created_at: int
     updated_at: int
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class FormationFollowStartRequest(BaseModel):
+    leader_id: str
+    follower_ids: list[str]
+
+
+class FormationState(BaseModel):
+    enabled: bool = False
+    leader_id: str | None = None
+    follower_ids: list[str] = Field(default_factory=list)
+    updated_at: int = 0

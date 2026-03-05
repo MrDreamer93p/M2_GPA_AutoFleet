@@ -4,48 +4,129 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AutoFleet Control MVP</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-  <main class="layout">
-    <section class="panel">
-      <h1>AutoFleet Control</h1>
-      <p class="hint">Protocol stack: REST + MQTT (RTSP reserved in telemetry fields)</p>
-      <button id="refreshBtn">Refresh Robots</button>
-      <table>
-        <thead>
-          <tr>
-            <th>Robot</th>
-            <th>Online</th>
-            <th>State</th>
-            <th>Battery</th>
-            <th>Last Seen(s)</th>
-            <th>RTSP</th>
-          </tr>
-        </thead>
-        <tbody id="robotTable"></tbody>
-      </table>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <h1>AutoFleet Control</h1>
+        <p class="hint">REST + MQTT control plane with mission orchestration</p>
+      </div>
+      <div class="top-actions">
+        <label class="inline">
+          Theme
+          <select id="themeSelect">
+            <option value="neo">Neo-Brutalism</option>
+            <option value="cyberpunk">Cyberpunk Neon</option>
+          </select>
+        </label>
+        <button id="refreshBtn" class="btn">Refresh Robots</button>
+        <label class="inline">
+          <input type="checkbox" id="autoRefreshToggle" checked>
+          Auto refresh (1s)
+        </label>
+      </div>
+    </header>
+
+    <section class="panel elevated api-panel">
+      <div class="api-config">
+        <label for="apiBase">API Endpoint</label>
+        <input id="apiBase" placeholder="http://192.168.1.100:8000/api/v1">
+        <button id="applyApiBaseBtn" class="btn subtle">Apply Endpoint</button>
+      </div>
+      <p class="hint small">This is the web-to-backend control address. Use your laptop LAN IP when opened from another device.</p>
     </section>
 
-    <section class="panel">
+    <section class="panel fleet-panel">
+      <div class="section-head">
+        <h2>Fleet Snapshot</h2>
+        <span class="badge">Live from telemetry topics</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Robot</th>
+              <th>Online</th>
+              <th>State</th>
+              <th>Battery</th>
+              <th>Last Seen(s)</th>
+              <th>Net Latency</th>
+              <th>RTSP</th>
+            </tr>
+          </thead>
+          <tbody id="robotTable"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel network-panel">
+      <div class="section-head">
+        <h2>Network Curves</h2>
+        <span class="badge">Latency(ms) per robot</span>
+      </div>
+      <canvas id="networkChart" height="180"></canvas>
+      <div id="networkLegend" class="legend"></div>
+    </section>
+
+    <section class="panel video-panel">
+      <div class="section-head">
+        <h2>Video Wall</h2>
+        <span class="badge">All connected robots</span>
+      </div>
+      <div id="videoWall" class="video-wall"></div>
+    </section>
+
+    <section class="panel control-panel">
+      <h2>Teleop (Keyboard)</h2>
+      <label>Control Robot ID <input id="teleopRobotId" value="R1"></label>
+      <p class="hint small">Use <code>WASD</code> or arrow keys. Release keys to stop.</p>
+      <div class="key-grid">
+        <div>W / ArrowUp: forward</div>
+        <div>S / ArrowDown: backward</div>
+        <div>A / ArrowLeft: turn left</div>
+        <div>D / ArrowRight: turn right</div>
+      </div>
+      <button id="teleopStopBtn" class="btn subtle">Force Stop</button>
+      <pre id="teleopStatus"></pre>
+    </section>
+
+    <section class="panel formation-panel">
+      <h2>Leader / Follower</h2>
+      <label>Leader Robot ID <input id="leaderRobotId" value="R1"></label>
+      <label>Follower Robot IDs(comma separated) <input id="followerRobotIds" value="R2,R3"></label>
+      <div class="button-row">
+        <button id="startFollowBtn" class="btn accent">Enable Follow</button>
+        <button id="stopFollowBtn" class="btn subtle">Disable Follow</button>
+      </div>
+      <pre id="formationStatus"></pre>
+    </section>
+
+    <section class="panel command-panel">
       <h2>Single Command</h2>
       <label>Robot ID <input id="robotId" value="R1"></label>
       <label>Command Type <input id="commandType" value="SET_MODE"></label>
       <label>Args(JSON)</label>
       <textarea id="commandArgs" rows="5">{"mode":"AUTO"}</textarea>
-      <button id="sendCmdBtn">Send Command</button>
+      <button id="sendCmdBtn" class="btn accent">Send Command</button>
     </section>
 
-    <section class="panel">
+    <section class="panel mission-panel">
       <h2>Mission</h2>
       <label>Mission ID <input id="missionId" value="m-demo-001"></label>
       <label>Robots(comma separated) <input id="missionRobots" value="R1,R2,R3"></label>
-      <button id="startMissionBtn">Start Mission</button>
-      <button id="returnMissionBtn">Return Mission</button>
-      <button id="stopMissionBtn">Stop Mission</button>
+      <div class="button-row">
+        <button id="startMissionBtn" class="btn accent">Start Mission</button>
+        <button id="returnMissionBtn" class="btn subtle">Return Mission</button>
+        <button id="stopMissionBtn" class="btn subtle">Stop Mission</button>
+      </div>
     </section>
 
-    <section class="panel">
+    <section class="panel output-panel">
       <h2>Output</h2>
       <pre id="output"></pre>
     </section>

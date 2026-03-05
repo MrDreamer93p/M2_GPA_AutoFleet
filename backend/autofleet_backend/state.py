@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .config import settings
-from .models import MissionState, Telemetry
+from .models import FormationState, MissionState, Telemetry
 
 
 @dataclass
@@ -13,6 +13,7 @@ class RuntimeState:
     latest_telemetry: dict[str, Telemetry] = field(default_factory=dict)
     latest_ack: dict[str, dict[str, Any]] = field(default_factory=dict)
     active_missions: dict[str, MissionState] = field(default_factory=dict)
+    formation: FormationState = field(default_factory=FormationState)
 
     def upsert_telemetry(self, payload: dict[str, Any]) -> Telemetry:
         telemetry = Telemetry.model_validate({**payload, "raw": payload})
@@ -28,6 +29,7 @@ class RuntimeState:
         out: list[dict[str, Any]] = []
         for robot_id, telem in sorted(self.latest_telemetry.items()):
             last_seen_age = max(0, now - telem.ts)
+            raw = telem.raw or {}
             out.append(
                 {
                     "robot_id": robot_id,
@@ -35,6 +37,10 @@ class RuntimeState:
                     "battery": telem.battery,
                     "mission_id": telem.mission_id,
                     "video_rtsp_url": telem.video_rtsp_url,
+                    "pose": telem.pose.model_dump(),
+                    "controls": raw.get("controls"),
+                    "motors": raw.get("motors"),
+                    "network": raw.get("network"),
                     "last_seen_ts": telem.ts,
                     "last_seen_age_s": last_seen_age,
                     "online": last_seen_age <= settings.robot_timeout_seconds,
@@ -67,3 +73,25 @@ class RuntimeState:
         if metadata:
             mission.metadata.update(metadata)
         return mission
+
+    def start_follow_formation(self, leader_id: str, follower_ids: list[str]) -> FormationState:
+        unique_followers = sorted({rid for rid in follower_ids if rid and rid != leader_id})
+        self.formation = FormationState(
+            enabled=True,
+            leader_id=leader_id,
+            follower_ids=unique_followers,
+            updated_at=int(time.time()),
+        )
+        return self.formation
+
+    def stop_follow_formation(self) -> FormationState:
+        self.formation = FormationState(enabled=False, leader_id=None, follower_ids=[], updated_at=int(time.time()))
+        return self.formation
+
+    def get_formation(self) -> FormationState:
+        return self.formation
+
+    def followers_for_leader(self, leader_id: str) -> list[str]:
+        if not self.formation.enabled or self.formation.leader_id != leader_id:
+            return []
+        return list(self.formation.follower_ids)

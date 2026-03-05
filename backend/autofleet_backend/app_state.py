@@ -5,7 +5,7 @@ import uuid
 from typing import Any
 
 from .config import settings
-from .models import CommandEnvelope, MissionState
+from .models import CommandEnvelope, FormationState, MissionState
 from .mqtt_bridge import MqttBridge
 from .state import RuntimeState
 from .storage import JsonlStore
@@ -80,3 +80,69 @@ class AppState:
             {"mission_id": mission_id, "status": status, "metadata": metadata or {}, "ts": int(time.time())},
         )
         return mission
+
+    def start_follow_formation(self, leader_id: str, follower_ids: list[str]) -> FormationState:
+        formation = self.runtime.start_follow_formation(leader_id=leader_id, follower_ids=follower_ids)
+        now = int(time.time())
+        self.store.append(
+            "formation",
+            {
+                "status": "STARTED",
+                "leader_id": formation.leader_id,
+                "follower_ids": formation.follower_ids,
+                "ts": now,
+            },
+        )
+        for follower_id in formation.follower_ids:
+            envelope = self.build_command(
+                robot_id=follower_id,
+                kind="SET_MODE",
+                args={"mode": "FOLLOW_LEADER", "leader_id": leader_id},
+                ttl_ms=2_000,
+            )
+            self.publish_command(envelope)
+        return formation
+
+    def stop_follow_formation(self) -> FormationState:
+        previous = self.runtime.get_formation()
+        formation = self.runtime.stop_follow_formation()
+        now = int(time.time())
+        self.store.append("formation", {"status": "STOPPED", "follower_ids": previous.follower_ids, "ts": now})
+        for follower_id in previous.follower_ids:
+            envelope = self.build_command(robot_id=follower_id, kind="SET_MODE", args={"mode": "AUTO"}, ttl_ms=2_000)
+            self.publish_command(envelope)
+        return formation
+
+    def get_formation(self) -> FormationState:
+        return self.runtime.get_formation()
+
+    def publish_teleop(self, robot_id: str, linear_x: float, angular_z: float, ttl_ms: int = 300) -> dict[str, Any]:
+        sent_robot_ids: list[str] = []
+        leader_cmd = self.build_command(
+            robot_id=robot_id,
+            kind="TELEOP",
+            args={"linear_x": linear_x, "angular_z": angular_z},
+            ttl_ms=ttl_ms,
+        )
+        self.publish_command(leader_cmd)
+        sent_robot_ids.append(robot_id)
+
+        followers = self.runtime.followers_for_leader(robot_id)
+        for follower_id in followers:
+            follower_cmd = self.build_command(
+                robot_id=follower_id,
+                kind="FOLLOW_LEADER_INPUT",
+                args={"leader_id": robot_id, "linear_x": linear_x, "angular_z": angular_z},
+                ttl_ms=ttl_ms,
+            )
+            self.publish_command(follower_cmd)
+            sent_robot_ids.append(follower_id)
+
+        return {
+            "leader_id": robot_id,
+            "followers": followers,
+            "linear_x": linear_x,
+            "angular_z": angular_z,
+            "ttl_ms": ttl_ms,
+            "sent_robot_ids": sent_robot_ids,
+        }

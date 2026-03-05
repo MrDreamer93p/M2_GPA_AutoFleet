@@ -21,6 +21,11 @@ class Robot:
     state: str = "IDLE"
     mission_id: str | None = None
     video_rtsp_url: str | None = None
+    linear_x: float = 0.0
+    angular_z: float = 0.0
+    latency_base_ms: float = 25.0
+    loss_base_pct: float = 0.5
+    rssi_base_dbm: float = -55.0
 
 
 def now_ts() -> int:
@@ -33,7 +38,16 @@ class Simulator:
         self.port = port
         self.prefix = prefix
         self.robots = {
-            rid: Robot(robot_id=rid, x=random.uniform(0.0, 2.0), y=random.uniform(0.0, 2.0), yaw=0.0, video_rtsp_url=f"rtsp://{rid}.local/stream")
+            rid: Robot(
+                robot_id=rid,
+                x=random.uniform(0.0, 2.0),
+                y=random.uniform(0.0, 2.0),
+                yaw=0.0,
+                video_rtsp_url=f"rtsp://{rid}.local/stream",
+                latency_base_ms=random.uniform(18.0, 36.0),
+                loss_base_pct=random.uniform(0.1, 1.2),
+                rssi_base_dbm=random.uniform(-68.0, -48.0),
+            )
             for rid in robot_ids
         }
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
@@ -59,14 +73,32 @@ class Simulator:
 
         cmd_type = payload.get("type", "")
         if cmd_type == "SET_MODE":
-            robot.state = payload.get("args", {}).get("mode", "IDLE")
+            mode = payload.get("args", {}).get("mode", "IDLE")
+            robot.state = str(mode)
+            if mode in {"AUTO", "SAFE", "IDLE"}:
+                robot.linear_x = 0.0
+                robot.angular_z = 0.0
         elif cmd_type == "START_MISSION":
             robot.state = "RUNNING"
             robot.mission_id = payload.get("args", {}).get("mission_id")
         elif cmd_type == "RETURN_HOME":
             robot.state = "RETURNING"
+            robot.linear_x = -0.25
+            robot.angular_z = 0.0
         elif cmd_type == "STOP":
             robot.state = "SAFE"
+            robot.linear_x = 0.0
+            robot.angular_z = 0.0
+        elif cmd_type == "TELEOP":
+            args = payload.get("args", {})
+            robot.linear_x = float(args.get("linear_x", 0.0))
+            robot.angular_z = float(args.get("angular_z", 0.0))
+            robot.state = "MANUAL"
+        elif cmd_type == "FOLLOW_LEADER_INPUT":
+            args = payload.get("args", {})
+            robot.linear_x = float(args.get("linear_x", 0.0)) * 0.9
+            robot.angular_z = float(args.get("angular_z", 0.0)) * 0.9
+            robot.state = "FOLLOWING"
 
         ack = {
             "v": 1,
@@ -81,10 +113,20 @@ class Simulator:
         while self.running:
             for robot in self.robots.values():
                 phase = time.time() * 0.4 + hash(robot.robot_id) % 10
-                robot.x += 0.05 * math.cos(phase)
-                robot.y += 0.05 * math.sin(phase)
-                robot.yaw = (robot.yaw + 0.05) % (2 * math.pi)
+                if robot.state in {"MANUAL", "FOLLOWING", "RETURNING"}:
+                    robot.yaw = (robot.yaw + robot.angular_z * 0.14) % (2 * math.pi)
+                    robot.x += robot.linear_x * 0.10 * math.cos(robot.yaw)
+                    robot.y += robot.linear_x * 0.10 * math.sin(robot.yaw)
+                else:
+                    robot.x += 0.04 * math.cos(phase)
+                    robot.y += 0.04 * math.sin(phase)
+                    robot.yaw = (robot.yaw + 0.04) % (2 * math.pi)
                 robot.battery = max(0.1, robot.battery - 0.0005)
+                latency_jitter = 8.0 * abs(math.sin(phase * 0.55)) + random.uniform(0.0, 5.0)
+                latency_ms = robot.latency_base_ms + latency_jitter
+                packet_loss_pct = min(12.0, robot.loss_base_pct + random.uniform(0.0, 1.6))
+                throughput_kbps = max(60.0, 1400.0 - latency_ms * 9.0 + random.uniform(-100.0, 120.0))
+                rssi_dbm = robot.rssi_base_dbm - latency_jitter * 0.18 + random.uniform(-1.5, 1.5)
 
                 payload = {
                     "v": 1,
@@ -95,6 +137,17 @@ class Simulator:
                     "state": robot.state,
                     "mission_id": robot.mission_id,
                     "video_rtsp_url": robot.video_rtsp_url,
+                    "controls": {"linear_x": round(robot.linear_x, 3), "angular_z": round(robot.angular_z, 3)},
+                    "motors": {
+                        "left_rpm": round(90.0 * robot.linear_x + 35.0 * robot.angular_z, 2),
+                        "right_rpm": round(90.0 * robot.linear_x - 35.0 * robot.angular_z, 2),
+                    },
+                    "network": {
+                        "latency_ms": round(latency_ms, 2),
+                        "packet_loss_pct": round(packet_loss_pct, 2),
+                        "throughput_kbps": round(throughput_kbps, 1),
+                        "rssi_dbm": round(rssi_dbm, 1),
+                    },
                 }
                 self.client.publish(f"{self.prefix}/telemetry/{robot.robot_id}", json.dumps(payload), qos=0)
             time.sleep(0.2)
@@ -118,7 +171,7 @@ class Simulator:
 def parse_args():
     parser = argparse.ArgumentParser(description="AutoFleet robot simulator")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=1883)
+    parser.add_argument("--port", type=int, default=3889)
     parser.add_argument("--prefix", default="fleet/v1")
     parser.add_argument("--robots", default="R1,R2,R3")
     return parser.parse_args()

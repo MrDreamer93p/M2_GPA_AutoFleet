@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from autofleet_backend.app_state import AppState
-from autofleet_backend.models import CommandRequest, MissionStartRequest
+from autofleet_backend.models import CommandRequest, FormationFollowStartRequest, MissionStartRequest, TeleopRequest
 
 
 state = AppState()
@@ -56,6 +56,12 @@ def post_command(robot_id: str, req: CommandRequest) -> dict[str, Any]:
     envelope = state.build_command(robot_id=robot_id, kind=req.type, args=req.args, ttl_ms=req.ttl_ms)
     state.publish_command(envelope)
     return {"published": True, "command": envelope.model_dump()}
+
+
+@app.post("/api/v1/teleop/{robot_id}")
+def post_teleop(robot_id: str, req: TeleopRequest) -> dict[str, Any]:
+    result = state.publish_teleop(robot_id=robot_id, linear_x=req.linear_x, angular_z=req.angular_z, ttl_ms=req.ttl_ms)
+    return {"published": True, "teleop": result}
 
 
 @app.post("/api/v1/missions/start")
@@ -124,3 +130,22 @@ def get_mission(mission_id: str) -> dict[str, Any]:
     if mission is None:
         raise HTTPException(status_code=404, detail=f"Mission {mission_id} not found")
     return mission.model_dump()
+
+
+@app.get("/api/v1/formation")
+def get_formation() -> dict[str, Any]:
+    return state.get_formation().model_dump()
+
+
+@app.post("/api/v1/formation/follow/start")
+def start_follow_formation(req: FormationFollowStartRequest) -> dict[str, Any]:
+    if not req.follower_ids:
+        raise HTTPException(status_code=400, detail="follower_ids must not be empty")
+    formation = state.start_follow_formation(leader_id=req.leader_id, follower_ids=req.follower_ids)
+    return {"formation": formation.model_dump()}
+
+
+@app.post("/api/v1/formation/follow/stop")
+def stop_follow_formation() -> dict[str, Any]:
+    formation = state.stop_follow_formation()
+    return {"formation": formation.model_dump()}
