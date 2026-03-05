@@ -1,0 +1,30 @@
+@'
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime data
+data/logs/
+data/results/
+data/raw/
+
+# Local env
+.env
+.env.*
+'@ | Set-Content .gitignore -Encoding UTF8
+
+git rm -r --cached -- backend/__pycache__ backend/autofleet_backend/__pycache__
+git rm -r --cached -- data/logs data/results data/raw
+
+git add .gitignore
+git commit -m "chore: add gitignore and untrack generated/runtime files"
+git push
