@@ -10,13 +10,26 @@ const formationStatus = document.getElementById("formationStatus");
 const teleopStatus = document.getElementById("teleopStatus");
 const apiBaseInput = document.getElementById("apiBase");
 const autoRefreshToggle = document.getElementById("autoRefreshToggle");
-const themeSelect = document.getElementById("themeSelect");
 
 const networkChart = document.getElementById("networkChart");
 const networkLegend = document.getElementById("networkLegend");
 const networkSummary = document.getElementById("networkSummary");
 const networkMetricSelect = document.getElementById("networkMetricSelect");
 const MAX_NETWORK_POINTS = 120;
+const MAX_DIAG_POINTS = 240;
+
+const viewControlBtn = document.getElementById("viewControlBtn");
+const viewDiagnosticsBtn = document.getElementById("viewDiagnosticsBtn");
+const diagSnapshotBtn = document.getElementById("diagSnapshotBtn");
+const diagStressBtn = document.getElementById("diagStressBtn");
+const diagVideoRobotCount = document.getElementById("diagVideoRobotCount");
+const diagStopBtn = document.getElementById("diagStopBtn");
+const diagStatus = document.getElementById("diagStatus");
+const diagChart = document.getElementById("diagChart");
+const diagCards = document.getElementById("diagCards");
+const diagProtocolCards = document.getElementById("diagProtocolCards");
+const diagRobotTable = document.getElementById("diagRobotTable");
+const diagOutput = document.getElementById("diagOutput");
 
 const robotIdInput = document.getElementById("robotId");
 const teleopRobotIdInput = document.getElementById("teleopRobotId");
@@ -31,6 +44,20 @@ let teleopTimer = null;
 let activeKeys = new Set();
 let lastTeleop = { robotId: "", linear_x: 0, angular_z: 0 };
 const networkHistory = new Map();
+const diagHistory = [];
+let lastDiagSnapshot = null;
+let diagTimer = null;
+let diagTickInFlight = false;
+let stressTimer = null;
+const stressState = {
+  running: false,
+  startedAt: 0,
+  stopAt: 0,
+  simulated_capacity_mbps: 0,
+  vehicle_count: 3,
+  samples: [],
+  lastError: null,
+};
 
 function print(obj) {
   output.textContent = JSON.stringify(obj, null, 2);
@@ -72,18 +99,47 @@ function average(values) {
   return arr.reduce((a, b) => a + b, 0) / arr.length;
 }
 
+function percentile(values, p) {
+  const arr = finiteValues(values).sort((a, b) => a - b);
+  if (!arr.length) return Number.NaN;
+  const idx = Math.max(0, Math.min(arr.length - 1, Math.floor((arr.length - 1) * p)));
+  return arr[idx];
+}
+
+function computeJitter(values) {
+  const arr = finiteValues(values);
+  if (arr.length < 2) return Number.NaN;
+  const diffs = [];
+  for (let i = 1; i < arr.length; i += 1) {
+    diffs.push(Math.abs(arr[i] - arr[i - 1]));
+  }
+  return average(diffs);
+}
+
+function bytesToKbps(bytes, durationMs) {
+  if (!Number.isFinite(bytes) || !Number.isFinite(durationMs) || durationMs <= 0) return Number.NaN;
+  return (bytes * 8) / (durationMs / 1000) / 1000;
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function formatTs(tsMs) {
+  const d = new Date(tsMs);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 function setApiBase(nextValue) {
   apiBase = nextValue.replace(/\/+$/, "");
   localStorage.setItem("autofleet_api_base", apiBase);
 }
 
-function applyTheme(themeName) {
-  const theme = themeName === "cyberpunk" ? "cyberpunk" : "neo";
-  document.body.classList.toggle("theme-cyberpunk", theme === "cyberpunk");
-  document.body.classList.toggle("theme-neo", theme === "neo");
-  localStorage.setItem("autofleet_theme", theme);
-  if (themeSelect) themeSelect.value = theme;
+function applyNeoTheme() {
+  document.body.classList.add("theme-neo");
   drawNetworkChart();
+  drawDiagChart();
 }
 
 async function api(path, options = {}) {
@@ -94,6 +150,36 @@ async function api(path, options = {}) {
   const body = await res.json();
   if (!res.ok) throw new Error(body.detail || "API error");
   return body;
+}
+
+async function timedGet(path) {
+  const started = performance.now();
+  const res = await fetch(`${apiBase}${path}`, {
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+  });
+  const text = await res.text();
+  const ended = performance.now();
+  let body = {};
+  if (text) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = { raw: text };
+    }
+  }
+  const bytes = new TextEncoder().encode(text).length;
+  if (!res.ok) {
+    const detail = body && typeof body === "object" ? body.detail : null;
+    throw new Error(detail || `HTTP ${res.status} @ ${path}`);
+  }
+  return {
+    path,
+    latency_ms: ended - started,
+    bytes,
+    throughput_kbps: bytesToKbps(bytes, ended - started),
+    body,
+  };
 }
 
 function colorForRobot(robotId) {
@@ -259,11 +345,10 @@ function drawNetworkChart() {
 
   const metric = networkMetricSelect.value || "latency_ms";
   const cfg = metricConfig(metric);
-  const isCyber = document.body.classList.contains("theme-cyberpunk");
-  const bg = isCyber ? "#090a14" : "#111111";
-  const grid = isCyber ? "#3e2a67" : "#2b2b2b";
-  const axis = isCyber ? "#ff4fc4" : "#ffffff";
-  const label = isCyber ? "#f5e9ff" : "#f7f7f7";
+  const bg = "#111111";
+  const grid = "#2b2b2b";
+  const axis = "#ffffff";
+  const label = "#f7f7f7";
 
   const rect = networkChart.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
@@ -390,6 +475,423 @@ function renderNetworkLegend(items) {
     .join("");
 }
 
+function setDiagStatus(text) {
+  if (diagStatus) diagStatus.textContent = text;
+}
+
+function addDiagSample(latencyMs) {
+  if (!Number.isFinite(latencyMs)) return;
+  diagHistory.push({ t: Date.now(), latency_ms: latencyMs });
+  if (diagHistory.length > MAX_DIAG_POINTS) {
+    diagHistory.splice(0, diagHistory.length - MAX_DIAG_POINTS);
+  }
+}
+
+function drawDiagChart() {
+  if (!diagChart) return;
+  const ctx = diagChart.getContext("2d");
+  if (!ctx) return;
+
+  const bg = "#111111";
+  const grid = "#2b2b2b";
+  const axis = "#ffffff";
+  const label = "#f7f7f7";
+  const line = "#ff2ea6";
+
+  const rect = diagChart.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(360, Math.floor(rect.width || 360));
+  const height = Math.max(190, Math.floor(rect.height || 190));
+  diagChart.width = Math.floor(width * dpr);
+  diagChart.height = Math.floor(height * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const padding = { top: 14, right: 14, bottom: 24, left: 48 };
+  const plotW = width - padding.left - padding.right;
+  const plotH = height - padding.top - padding.bottom;
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, width, height);
+  ctx.strokeStyle = "#000000";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(0, 0, width, height);
+
+  const videoSamples = stressState.samples || [];
+  const hasVideoData = videoSamples.length >= 2;
+  const seriesA = hasVideoData ? videoSamples.map((x) => x.offered_mbps) : diagHistory.map((x) => x.latency_ms);
+  const seriesB = hasVideoData ? videoSamples.map((x) => x.delivered_mbps) : [];
+  const values = finiteValues([...seriesA, ...seriesB]);
+  const maxY = values.length
+    ? Math.max(hasVideoData ? 10 : 80, ...values, hasVideoData ? stressState.simulated_capacity_mbps : 0)
+    : hasVideoData
+      ? 10
+      : 80;
+  const minY = 0;
+
+  ctx.strokeStyle = grid;
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i += 1) {
+    const y = padding.top + (plotH * i) / 4;
+    ctx.beginPath();
+    ctx.moveTo(padding.left, y);
+    ctx.lineTo(padding.left + plotW, y);
+    ctx.stroke();
+  }
+  for (let i = 0; i <= 6; i += 1) {
+    const x = padding.left + (plotW * i) / 6;
+    ctx.beginPath();
+    ctx.moveTo(x, padding.top);
+    ctx.lineTo(x, padding.top + plotH);
+    ctx.stroke();
+  }
+
+  ctx.strokeStyle = axis;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(padding.left, padding.top);
+  ctx.lineTo(padding.left, padding.top + plotH);
+  ctx.lineTo(padding.left + plotW, padding.top + plotH);
+  ctx.stroke();
+
+  const yToPx = (v) => padding.top + ((maxY - v) / (maxY - minY || 1)) * plotH;
+  const pointsA = hasVideoData
+    ? videoSamples.filter((x) => Number.isFinite(x.offered_mbps))
+    : diagHistory.filter((x) => Number.isFinite(x.latency_ms));
+  if (pointsA.length >= 2) {
+    ctx.strokeStyle = line;
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    for (let i = 0; i < pointsA.length; i += 1) {
+      const x = padding.left + (plotW * i) / (MAX_DIAG_POINTS - 1);
+      const y = yToPx(hasVideoData ? pointsA[i].offered_mbps : pointsA[i].latency_ms);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  if (hasVideoData) {
+    const pointsB = videoSamples.filter((x) => Number.isFinite(x.delivered_mbps));
+    if (pointsB.length >= 2) {
+      ctx.strokeStyle = "#00d6ff";
+      ctx.lineWidth = 2.3;
+      ctx.beginPath();
+      for (let i = 0; i < pointsB.length; i += 1) {
+        const x = padding.left + (plotW * i) / (MAX_DIAG_POINTS - 1);
+        const y = yToPx(pointsB[i].delivered_mbps);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+
+    if (Number.isFinite(stressState.simulated_capacity_mbps) && stressState.simulated_capacity_mbps > 0) {
+      ctx.strokeStyle = "#f8ff57";
+      ctx.setLineDash([6, 4]);
+      ctx.lineWidth = 1.4;
+      const y = yToPx(stressState.simulated_capacity_mbps);
+      ctx.beginPath();
+      ctx.moveTo(padding.left, y);
+      ctx.lineTo(padding.left + plotW, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+
+  ctx.fillStyle = label;
+  ctx.font = "12px IBM Plex Mono, monospace";
+  if (hasVideoData) {
+    ctx.fillText("Video stress throughput (Mbps)", padding.left + 4, 12);
+    ctx.fillText(`${Math.round(maxY)}Mbps`, 2, padding.top + 10);
+    ctx.fillText("0Mbps", 8, padding.top + plotH);
+    ctx.fillText(`-${Math.round(MAX_DIAG_POINTS / 4)}s`, padding.left + 2, height - 6);
+    ctx.fillText("now", width - 28, height - 6);
+    ctx.fillText("Pink=Offered  Cyan=Delivered  Yellow=Link cap", padding.left + 4, height - 6);
+  } else {
+    ctx.fillText("API latency (ms)", padding.left + 4, 12);
+    ctx.fillText(`${Math.round(maxY)}ms`, 4, padding.top + 10);
+    ctx.fillText("0ms", 10, padding.top + plotH);
+    ctx.fillText(`-${Math.round(MAX_DIAG_POINTS)}s`, padding.left + 2, height - 6);
+    ctx.fillText("now", width - 28, height - 6);
+  }
+}
+
+function getVideoVehicleCount() {
+  const selected = Number(diagVideoRobotCount?.value || 3);
+  return clamp(Math.round(selected), 1, 5);
+}
+
+function stressSummary(nowMs = Date.now()) {
+  const end = stressState.running ? nowMs : stressState.stopAt;
+  const durationMs = Math.max(1, end - stressState.startedAt);
+  const samples = stressState.samples || [];
+  const delivered = finiteValues(samples.map((x) => x.delivered_mbps));
+  const loss = finiteValues(samples.map((x) => x.loss_pct));
+  const jitter = finiteValues(samples.map((x) => x.jitter_ms));
+  const stableSamples = samples.filter((x) => x.loss_pct <= 2 && x.jitter_ms <= 20);
+  const stableDelivered = finiteValues(stableSamples.map((x) => x.delivered_mbps));
+  const totalLimitMbps = stableDelivered.length ? percentile(stableDelivered, 0.95) : percentile(delivered, 0.5);
+  const vehicleCount = Math.max(1, stressState.vehicle_count || 1);
+  const singleLimitMbps = Number.isFinite(totalLimitMbps) ? totalLimitMbps / vehicleCount : Number.NaN;
+  const avgLoss = average(loss);
+  const p95Jitter = percentile(jitter, 0.95);
+  const maxDeliveredMbps = delivered.length ? Math.max(...delivered) : Number.NaN;
+  const currentDeliveredMbps = delivered.length ? delivered[delivered.length - 1] : Number.NaN;
+  const stablePct = samples.length ? (stableSamples.length * 100) / samples.length : Number.NaN;
+  const isStable = Number.isFinite(avgLoss) && Number.isFinite(p95Jitter) && avgLoss <= 2 && p95Jitter <= 20 && stablePct >= 80;
+  return {
+    running: stressState.running,
+    duration_s: durationMs / 1000,
+    vehicle_count: vehicleCount,
+    sample_count: samples.length,
+    simulated_capacity_mbps: stressState.simulated_capacity_mbps,
+    total_bw_limit_mbps: totalLimitMbps,
+    per_stream_limit_mbps: singleLimitMbps,
+    avg_packet_loss_pct: avgLoss,
+    p95_jitter_ms: p95Jitter,
+    max_delivered_mbps: maxDeliveredMbps,
+    current_delivered_mbps: currentDeliveredMbps,
+    stable_sample_pct: stablePct,
+    stable: isStable,
+    last_error: stressState.lastError,
+  };
+}
+
+function renderDiagnostics(snapshot) {
+  if (!diagCards || !diagProtocolCards || !diagRobotTable || !diagOutput) return;
+
+  const items = snapshot.items || [];
+  const latestSamples = items.map((r) => getLatestSample(r.robot_id)).filter(Boolean);
+  const online = items.filter((x) => x.online).length;
+  const avgTelemetryLatency = average(latestSamples.map((s) => s.latency_ms));
+  const avgTelemetryJitter = average(latestSamples.map((s) => s.jitter_ms));
+  const avgControlRtt = average(latestSamples.map((s) => s.control_rtt_ms));
+  const totalTelemetryKbps = finiteValues(latestSamples.map((s) => s.throughput_kbps)).reduce((a, b) => a + b, 0);
+  const peakTelemetryKbps = Math.max(
+    0,
+    ...items.map((r) => getMaxThroughput(r.robot_id)).filter((x) => Number.isFinite(x))
+  );
+  const streamCount = items.filter((r) => r.video_rtsp_url).length;
+  const stress = stressSummary();
+
+  diagCards.innerHTML = `
+    <div class="summary-card"><span>Backend /health</span><strong>${escapeHtml(fmtNum(snapshot.health_latency_ms, 1))} ms</strong></div>
+    <div class="summary-card"><span>Backend /robots</span><strong>${escapeHtml(fmtNum(snapshot.robots_latency_ms, 1))} ms</strong></div>
+    <div class="summary-card"><span>Connected Robots</span><strong>${escapeHtml(online)}/${escapeHtml(items.length)}</strong></div>
+    <div class="summary-card"><span>Avg Device Latency</span><strong>${escapeHtml(fmtNum(avgTelemetryLatency, 1))} ms</strong></div>
+    <div class="summary-card"><span>Avg Device Jitter</span><strong>${escapeHtml(fmtNum(avgTelemetryJitter, 1))} ms</strong></div>
+    <div class="summary-card"><span>Avg Control RTT</span><strong>${escapeHtml(fmtNum(avgControlRtt, 1))} ms</strong></div>
+    <div class="summary-card"><span>Video Total Limit</span><strong>${escapeHtml(fmtNum(stress.total_bw_limit_mbps, 2))} Mbps</strong></div>
+    <div class="summary-card"><span>Video Per-stream Limit</span><strong>${escapeHtml(fmtNum(stress.per_stream_limit_mbps, 2))} Mbps</strong></div>
+    <div class="summary-card"><span>Sim Avg Packet Loss</span><strong>${escapeHtml(fmtNum(stress.avg_packet_loss_pct, 2))} %</strong></div>
+    <div class="summary-card"><span>Sim P95 Jitter</span><strong>${escapeHtml(fmtNum(stress.p95_jitter_ms, 1))} ms</strong></div>
+  `;
+
+  diagProtocolCards.innerHTML = `
+    <div class="summary-card"><span>HTTP Pull Throughput</span><strong>${escapeHtml(fmtNum(snapshot.http_kbps, 1))} kbps</strong></div>
+    <div class="summary-card"><span>MQTT Telemetry Total</span><strong>${escapeHtml(fmtNum(totalTelemetryKbps, 0))} kbps</strong></div>
+    <div class="summary-card"><span>MQTT Telemetry Peak</span><strong>${escapeHtml(fmtNum(peakTelemetryKbps, 0))} kbps</strong></div>
+    <div class="summary-card"><span>RTSP Streams Online</span><strong>${escapeHtml(streamCount)}</strong></div>
+    <div class="summary-card"><span>Sim Vehicles</span><strong>${escapeHtml(stress.vehicle_count)}</strong></div>
+    <div class="summary-card"><span>Sim Link Capacity</span><strong>${escapeHtml(fmtNum(stress.simulated_capacity_mbps, 2))} Mbps</strong></div>
+    <div class="summary-card"><span>Sim Max Delivered</span><strong>${escapeHtml(fmtNum(stress.max_delivered_mbps, 2))} Mbps</strong></div>
+    <div class="summary-card"><span>Stability</span><strong>${stress.stable ? "Stable" : "Unstable"}</strong></div>
+  `;
+
+  diagRobotTable.innerHTML = items
+    .map((robot) => {
+      const sample = getLatestSample(robot.robot_id) || {};
+      return `
+      <tr>
+        <td>${escapeHtml(robot.robot_id)}</td>
+        <td class="${robot.online ? "online" : "offline"}">${escapeHtml(robot.online)}</td>
+        <td>${escapeHtml(fmtNum(sample.latency_ms, 1))}ms</td>
+        <td>${escapeHtml(fmtNum(sample.jitter_ms, 1))}ms</td>
+        <td>${escapeHtml(fmtNum(sample.throughput_kbps, 0))}kbps</td>
+        <td>${escapeHtml(fmtNum(sample.control_rtt_ms, 1))}ms</td>
+        <td>${escapeHtml(fmtNum(sample.packet_loss_pct, 2))}%</td>
+      </tr>`;
+    })
+    .join("");
+
+  diagOutput.textContent = JSON.stringify(
+    {
+      ts: formatTs(Date.now()),
+      snapshot,
+      video_simulation_report: stress,
+    },
+    null,
+    2
+  );
+}
+
+async function refreshDiagnosticsSnapshot({ quiet = false } = {}) {
+  const [health, robots] = await Promise.all([timedGet("/health"), timedGet("/robots")]);
+  const items = robots.body.items || [];
+  updateNetworkHistory(items);
+  const pullLatency = [health.latency_ms, robots.latency_ms];
+  const snapshot = {
+    health_latency_ms: health.latency_ms,
+    robots_latency_ms: robots.latency_ms,
+    api_pull_jitter_ms: computeJitter(pullLatency),
+    http_kbps: bytesToKbps(health.bytes + robots.bytes, health.latency_ms + robots.latency_ms),
+    items,
+  };
+  lastDiagSnapshot = snapshot;
+  addDiagSample(robots.latency_ms);
+  drawDiagChart();
+  renderDiagnostics(snapshot);
+  if (!quiet) {
+    setDiagStatus(`Snapshot refreshed at ${formatTs(Date.now())}`);
+  }
+}
+
+function clearStressState() {
+  stressState.running = false;
+  stressState.startedAt = 0;
+  stressState.stopAt = 0;
+  stressState.simulated_capacity_mbps = 0;
+  stressState.vehicle_count = getVideoVehicleCount();
+  stressState.samples = [];
+  stressState.lastError = null;
+}
+
+function stopStressTest({ byTimeout = false } = {}) {
+  if (stressTimer) {
+    clearInterval(stressTimer);
+    stressTimer = null;
+  }
+  if (stressState.running) {
+    stressState.running = false;
+    stressState.stopAt = Date.now();
+  }
+  const s = stressSummary();
+  if (byTimeout) {
+    setDiagStatus(
+      `Video stress done: total limit ${fmtNum(s.total_bw_limit_mbps, 2)} Mbps, per stream ${fmtNum(s.per_stream_limit_mbps, 2)} Mbps, ${s.stable ? "stable" : "unstable"}`
+    );
+  } else {
+    setDiagStatus(
+      `Video stress stopped: total limit ${fmtNum(s.total_bw_limit_mbps, 2)} Mbps, per stream ${fmtNum(s.per_stream_limit_mbps, 2)} Mbps`
+    );
+  }
+  if (lastDiagSnapshot) {
+    renderDiagnostics(lastDiagSnapshot);
+    drawDiagChart();
+  }
+}
+
+function simulateVideoSample(elapsedMs) {
+  const vehicleCount = Math.max(1, stressState.vehicle_count || 1);
+  const progress = clamp(elapsedMs / 60_000, 0, 1);
+  const perStreamOffered = 1.2 + progress * 10.0;
+  const offeredMbps = perStreamOffered * vehicleCount;
+  const capacity = Math.max(8, stressState.simulated_capacity_mbps);
+  const load = offeredMbps / capacity;
+
+  const baseLoss = 0.2 + Math.random() * 0.35;
+  const overloadLoss = load > 1 ? (load - 1) * (18 + vehicleCount * 1.3) + Math.random() * 1.5 : 0;
+  const lossPct = clamp(baseLoss + overloadLoss, 0, 45);
+
+  const baseJitter = 2.0 + Math.random() * 3.5;
+  const overloadJitter = load > 1 ? (load - 1) * 30 + Math.random() * 5 : 0;
+  const jitterMs = clamp(baseJitter + overloadJitter, 0.5, 120);
+
+  let deliveredMbps = offeredMbps * (1 - lossPct / 100);
+  deliveredMbps = Math.min(deliveredMbps, capacity * (0.95 + Math.random() * 0.05));
+  deliveredMbps = Math.max(0, deliveredMbps);
+  const perStreamDeliveredMbps = deliveredMbps / vehicleCount;
+
+  return {
+    t: Date.now(),
+    elapsed_ms: elapsedMs,
+    offered_mbps: offeredMbps,
+    delivered_mbps: deliveredMbps,
+    per_stream_delivered_mbps: perStreamDeliveredMbps,
+    loss_pct: lossPct,
+    jitter_ms: jitterMs,
+  };
+}
+
+function runStressTick() {
+  if (!stressState.running) return;
+  const elapsed = Date.now() - stressState.startedAt;
+  const sample = simulateVideoSample(elapsed);
+  stressState.samples.push(sample);
+  if (stressState.samples.length > MAX_DIAG_POINTS) {
+    stressState.samples.splice(0, stressState.samples.length - MAX_DIAG_POINTS);
+  }
+  const remaining = Math.max(0, Math.ceil((60_000 - elapsed) / 1000));
+  const s = stressSummary();
+  setDiagStatus(
+    `Video stress (${remaining}s left): delivered ${fmtNum(s.current_delivered_mbps, 2)} Mbps, loss ${fmtNum(s.avg_packet_loss_pct, 2)}%, jitter ${fmtNum(s.p95_jitter_ms, 1)}ms`
+  );
+  if (lastDiagSnapshot) {
+    renderDiagnostics(lastDiagSnapshot);
+  }
+  drawDiagChart();
+}
+
+function startStressTest() {
+  if (stressState.running) return;
+  clearStressState();
+  stressState.running = true;
+  stressState.vehicle_count = getVideoVehicleCount();
+  stressState.simulated_capacity_mbps = clamp(10 + Math.random() * 18 - stressState.vehicle_count * 0.6, 8, 35);
+  stressState.startedAt = Date.now();
+  stressState.stopAt = stressState.startedAt + 60_000;
+  setDiagStatus(
+    `Video simulation started: ${stressState.vehicle_count} robots, link cap ${fmtNum(stressState.simulated_capacity_mbps, 2)} Mbps`
+  );
+  stressTimer = setInterval(() => {
+    runStressTick();
+    if (Date.now() >= stressState.stopAt) {
+      stopStressTest({ byTimeout: true });
+    }
+  }, 250);
+  runStressTick();
+}
+
+function resetDiagnosticsAutoRefresh() {
+  if (diagTimer) {
+    clearInterval(diagTimer);
+    diagTimer = null;
+  }
+  const inDiagnostics = document.body.classList.contains("show-diagnostics");
+  if (inDiagnostics && autoRefreshToggle.checked) {
+    diagTimer = setInterval(async () => {
+      if (diagTickInFlight) return;
+      diagTickInFlight = true;
+      try {
+        await refreshDiagnosticsSnapshot({ quiet: true });
+      } catch {
+        // Keep UI responsive when one diagnostics tick fails.
+      } finally {
+        diagTickInFlight = false;
+      }
+    }, 1000);
+  }
+}
+
+function setView(mode) {
+  const next = mode === "diagnostics" ? "diagnostics" : "control";
+  const showDiagnostics = next === "diagnostics";
+  if (!showDiagnostics && stressState.running) {
+    stopStressTest({ byTimeout: false });
+  }
+  document.body.classList.toggle("show-diagnostics", showDiagnostics);
+  if (viewControlBtn) viewControlBtn.classList.toggle("active", !showDiagnostics);
+  if (viewDiagnosticsBtn) viewDiagnosticsBtn.classList.toggle("active", showDiagnostics);
+  localStorage.setItem("autofleet_view", next);
+  resetAutoRefresh();
+  resetDiagnosticsAutoRefresh();
+  if (showDiagnostics) {
+    refreshDiagnosticsSnapshot({ quiet: true }).catch((err) => setDiagStatus(`Diagnostics refresh failed: ${err}`));
+    drawDiagChart();
+  }
+}
+
 async function refreshRobots({ quiet = false } = {}) {
   const data = await api("/robots");
   robotsCache = data.items || [];
@@ -414,7 +916,7 @@ function resetAutoRefresh() {
     clearInterval(refreshTimer);
     refreshTimer = null;
   }
-  if (autoRefreshToggle.checked) {
+  if (autoRefreshToggle.checked && !document.body.classList.contains("show-diagnostics")) {
     refreshTimer = setInterval(async () => {
       try {
         await refreshRobots({ quiet: true });
@@ -532,10 +1034,38 @@ document.getElementById("refreshBtn").onclick = async () => {
   }
 };
 
-autoRefreshToggle.onchange = resetAutoRefresh;
 networkMetricSelect.onchange = drawNetworkChart;
-if (themeSelect) {
-  themeSelect.onchange = (ev) => applyTheme(ev.target.value);
+
+if (viewControlBtn) {
+  viewControlBtn.onclick = () => setView("control");
+}
+
+if (viewDiagnosticsBtn) {
+  viewDiagnosticsBtn.onclick = () => setView("diagnostics");
+}
+
+if (diagSnapshotBtn) {
+  diagSnapshotBtn.onclick = async () => {
+    try {
+      await refreshDiagnosticsSnapshot();
+    } catch (err) {
+      setDiagStatus(`Diagnostics refresh failed: ${String(err)}`);
+      print({ error: String(err) });
+    }
+  };
+}
+
+if (diagStressBtn) {
+  diagStressBtn.onclick = () => {
+    setView("diagnostics");
+    startStressTest();
+  };
+}
+
+if (diagStopBtn) {
+  diagStopBtn.onclick = () => {
+    stopStressTest({ byTimeout: false });
+  };
 }
 
 document.getElementById("applyApiBaseBtn").onclick = async () => {
@@ -547,6 +1077,7 @@ document.getElementById("applyApiBaseBtn").onclick = async () => {
     setApiBase(next);
     await refreshRobots();
     await refreshFormation({ quiet: true });
+    await refreshDiagnosticsSnapshot({ quiet: true });
   } catch (err) {
     print({ error: String(err) });
   }
@@ -644,9 +1175,20 @@ document.getElementById("stopMissionBtn").onclick = async () => {
   }
 };
 
-window.addEventListener("resize", () => drawNetworkChart());
+autoRefreshToggle.onchange = () => {
+  resetAutoRefresh();
+  resetDiagnosticsAutoRefresh();
+};
 
-applyTheme(localStorage.getItem("autofleet_theme") || "neo");
-resetAutoRefresh();
-refreshRobots().catch((err) => print({ error: String(err) }));
+window.addEventListener("resize", () => {
+  drawNetworkChart();
+  drawDiagChart();
+});
+
+applyNeoTheme();
+setDiagStatus("Idle.");
+setView(localStorage.getItem("autofleet_view") || "control");
+refreshRobots()
+  .then(() => refreshDiagnosticsSnapshot({ quiet: true }))
+  .catch((err) => print({ error: String(err) }));
 refreshFormation({ quiet: true }).catch((err) => print({ error: String(err) }));

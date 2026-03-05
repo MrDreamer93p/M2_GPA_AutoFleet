@@ -17,13 +17,10 @@
         <p class="hint">REST + MQTT control plane with mission orchestration</p>
       </div>
       <div class="top-actions">
-        <label class="inline">
-          Theme
-          <select id="themeSelect">
-            <option value="neo">Neo-Brutalism</option>
-            <option value="cyberpunk">Cyberpunk Neon</option>
-          </select>
-        </label>
+        <div class="view-switch">
+          <button id="viewControlBtn" class="btn subtle view-btn active">Control</button>
+          <button id="viewDiagnosticsBtn" class="btn subtle view-btn">Network Lab</button>
+        </div>
         <button id="refreshBtn" class="btn">Refresh Robots</button>
         <label class="inline">
           <input type="checkbox" id="autoRefreshToggle" checked>
@@ -41,7 +38,7 @@
       <p class="hint small">This is the web-to-backend control address. Use your laptop LAN IP when opened from another device.</p>
     </section>
 
-    <section class="panel fleet-panel">
+    <section class="panel fleet-panel view-control">
       <div class="section-head">
         <h2>Fleet Snapshot</h2>
         <span class="badge">Live from telemetry topics</span>
@@ -67,7 +64,21 @@
       </div>
     </section>
 
-    <section class="panel network-panel">
+    <section class="panel control-panel view-control">
+      <h2>Teleop (Keyboard)</h2>
+      <label>Control Robot ID <input id="teleopRobotId" value="R1"></label>
+      <p class="hint small">Use <code>WASD</code> or arrow keys. Release keys to stop.</p>
+      <div class="key-grid">
+        <div>W / ArrowUp: forward</div>
+        <div>S / ArrowDown: backward</div>
+        <div>A / ArrowLeft: turn left</div>
+        <div>D / ArrowRight: turn right</div>
+      </div>
+      <button id="teleopStopBtn" class="btn subtle">Force Stop</button>
+      <pre id="teleopStatus"></pre>
+    </section>
+
+    <section class="panel network-panel view-control">
       <div class="section-head">
         <h2>Network Curves</h2>
         <div class="network-controls">
@@ -89,7 +100,7 @@
       <div id="networkLegend" class="legend"></div>
     </section>
 
-    <section class="panel video-panel">
+    <section class="panel video-panel view-control">
       <div class="section-head">
         <h2>Video Wall</h2>
         <span class="badge">All connected robots</span>
@@ -97,21 +108,7 @@
       <div id="videoWall" class="video-wall"></div>
     </section>
 
-    <section class="panel control-panel">
-      <h2>Teleop (Keyboard)</h2>
-      <label>Control Robot ID <input id="teleopRobotId" value="R1"></label>
-      <p class="hint small">Use <code>WASD</code> or arrow keys. Release keys to stop.</p>
-      <div class="key-grid">
-        <div>W / ArrowUp: forward</div>
-        <div>S / ArrowDown: backward</div>
-        <div>A / ArrowLeft: turn left</div>
-        <div>D / ArrowRight: turn right</div>
-      </div>
-      <button id="teleopStopBtn" class="btn subtle">Force Stop</button>
-      <pre id="teleopStatus"></pre>
-    </section>
-
-    <section class="panel formation-panel">
+    <section class="panel formation-panel view-control">
       <h2>Leader / Follower</h2>
       <label>Leader Robot ID <input id="leaderRobotId" value="R1"></label>
       <label>Follower Robot IDs(comma separated) <input id="followerRobotIds" value="R2,R3"></label>
@@ -122,7 +119,7 @@
       <pre id="formationStatus"></pre>
     </section>
 
-    <section class="panel command-panel">
+    <section class="panel command-panel view-control">
       <h2>Single Command</h2>
       <label>Robot ID <input id="robotId" value="R1"></label>
       <label>Command Type <input id="commandType" value="SET_MODE"></label>
@@ -131,7 +128,7 @@
       <button id="sendCmdBtn" class="btn accent">Send Command</button>
     </section>
 
-    <section class="panel mission-panel">
+    <section class="panel mission-panel view-control">
       <h2>Mission</h2>
       <label>Mission ID <input id="missionId" value="m-demo-001"></label>
       <label>Robots(comma separated) <input id="missionRobots" value="R1,R2,R3"></label>
@@ -142,9 +139,52 @@
       </div>
     </section>
 
-    <section class="panel output-panel">
+    <section class="panel output-panel view-control">
       <h2>Output</h2>
       <pre id="output"></pre>
+    </section>
+
+    <section class="panel diagnostics-panel view-diagnostics">
+      <div class="section-head">
+        <h2>Network Diagnostics Lab</h2>
+        <div class="diag-actions">
+          <label class="inline diag-inline">
+            Sim Robots
+            <select id="diagVideoRobotCount">
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3" selected>3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+            </select>
+          </label>
+          <button id="diagSnapshotBtn" class="btn subtle">Refresh Snapshot</button>
+          <button id="diagStressBtn" class="btn accent">Start 1-min Video Stress (Sim)</button>
+          <button id="diagStopBtn" class="btn subtle">Stop</button>
+        </div>
+      </div>
+      <p class="hint small">Simulation mode: assumes 1-5 robots and estimates sustainable video bandwidth in a 60s run.</p>
+      <div id="diagStatus" class="diag-status">Idle.</div>
+      <canvas id="diagChart" height="190"></canvas>
+      <div id="diagCards" class="summary-grid"></div>
+      <div id="diagProtocolCards" class="summary-grid"></div>
+      <div class="table-wrap diag-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Robot</th>
+              <th>Online</th>
+              <th>Latency</th>
+              <th>Jitter</th>
+              <th>Throughput</th>
+              <th>RTT</th>
+              <th>Packet Loss</th>
+            </tr>
+          </thead>
+          <tbody id="diagRobotTable"></tbody>
+        </table>
+      </div>
+      <pre id="diagOutput"></pre>
     </section>
   </main>
   <script src="./app.js"></script>
