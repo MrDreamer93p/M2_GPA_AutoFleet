@@ -107,6 +107,7 @@ class Simulator:
             "status": "ACCEPTED",
             "ts": now_ts(),
         }
+        time.sleep(random.uniform(0.008, 0.04))
         self.client.publish(f"{self.prefix}/ack/{robot_id}", json.dumps(ack), qos=1)
 
     def telemetry_loop(self):

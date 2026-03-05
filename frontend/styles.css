@@ -1,5 +1,20 @@
-* {
-  box-sizing: border-box;
+:root {
+  --bg: #080808;
+  --bg-alt: #111111;
+  --surface: #141414;
+  --surface-elev: #1a1a1a;
+  --line: #ffffff;
+  --line-soft: #5a5a5a;
+  --text: #fefefe;
+  --muted: #bbbbbb;
+  --ok: #80ffab;
+  --bad: #ff6ea8;
+  --accent: #ff2ea6;
+  --accent-alt: #ff62bf;
+  --radius: 0;
+  --border-w: 3px;
+  --hard-shadow: 6px 6px 0 #ff2ea6;
+  --panel-glow: none;
 }
 
 body.theme-neo {
@@ -38,6 +53,10 @@ body.theme-cyberpunk {
   --border-w: 2px;
   --hard-shadow: 0 0 0 transparent;
   --panel-glow: 0 0 10px rgba(255, 69, 194, 0.22);
+}
+
+* {
+  box-sizing: border-box;
 }
 
 body {
@@ -218,6 +237,11 @@ select:focus {
   box-shadow: var(--hard-shadow);
 }
 
+body.theme-cyberpunk .btn {
+  box-shadow: var(--panel-glow);
+  text-shadow: 0 0 6px rgba(255, 69, 194, 0.5);
+}
+
 .btn:hover {
   transform: translate(-2px, -2px);
 }
@@ -234,11 +258,6 @@ select:focus {
 
 .btn.subtle {
   background: #1f1f1f;
-}
-
-body.theme-cyberpunk .btn {
-  box-shadow: var(--panel-glow);
-  text-shadow: 0 0 6px rgba(255, 69, 194, 0.5);
 }
 
 body.theme-cyberpunk .btn.subtle {
@@ -269,7 +288,7 @@ body.theme-cyberpunk .btn.subtle {
 
 table {
   width: 100%;
-  min-width: 770px;
+  min-width: 1080px;
   border-collapse: collapse;
 }
 
@@ -278,7 +297,7 @@ td {
   border-bottom: var(--border-w) solid var(--line-soft);
   text-align: left;
   padding: 8px 6px;
-  font-size: 0.84rem;
+  font-size: 0.82rem;
 }
 
 tbody tr:nth-child(even) {
@@ -291,6 +310,97 @@ tbody tr:nth-child(even) {
 
 .offline {
   color: var(--bad);
+}
+
+.network-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.metric-inline {
+  font-size: 0.76rem;
+}
+
+.metric-inline select {
+  width: 180px;
+  margin: 0;
+}
+
+#networkChart {
+  width: 100%;
+  height: 220px;
+  display: block;
+  border: var(--border-w) solid var(--line);
+  border-radius: var(--radius);
+  margin-top: 8px;
+}
+
+.summary-grid {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.summary-card {
+  border: var(--border-w) solid var(--line-soft);
+  background: var(--bg-alt);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.summary-card span {
+  font-size: 0.74rem;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.summary-card strong {
+  font-size: 1.05rem;
+}
+
+.legend {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 6px;
+}
+
+.legend-item {
+  border: var(--border-w) solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--bg-alt);
+  padding: 6px 8px;
+  font-size: 0.76rem;
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  column-gap: 8px;
+  row-gap: 2px;
+  align-items: center;
+}
+
+.legend-item strong {
+  font-size: 0.84rem;
+}
+
+.legend-item span {
+  color: var(--muted);
+}
+
+.legend-empty {
+  grid-template-columns: 1fr;
+  text-align: center;
+}
+
+.legend-color {
+  width: 12px;
+  height: 12px;
+  border: 2px solid #fff;
+  display: inline-block;
 }
 
 .button-row {
@@ -320,50 +430,6 @@ pre {
   border-radius: var(--radius);
   background: var(--bg-alt);
   padding: 10px;
-}
-
-#networkChart {
-  width: 100%;
-  height: 220px;
-  display: block;
-  border: var(--border-w) solid var(--line);
-  border-radius: var(--radius);
-  margin-top: 8px;
-}
-
-.legend {
-  margin-top: 8px;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 6px;
-}
-
-.legend-item {
-  border: var(--border-w) solid var(--line-soft);
-  border-radius: var(--radius);
-  background: var(--bg-alt);
-  padding: 6px 8px;
-  font-size: 0.76rem;
-  display: grid;
-  grid-template-columns: auto auto 1fr;
-  column-gap: 8px;
-  row-gap: 2px;
-  align-items: center;
-}
-
-.legend-item strong {
-  font-size: 0.84rem;
-}
-
-.legend-item span {
-  color: var(--muted);
-}
-
-.legend-color {
-  width: 12px;
-  height: 12px;
-  border: 2px solid #fff;
-  display: inline-block;
 }
 
 .video-wall {
@@ -476,5 +542,10 @@ pre {
   .top-actions {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .network-controls {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }

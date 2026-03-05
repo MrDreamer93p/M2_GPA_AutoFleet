@@ -27,9 +27,9 @@ class AppState:
             self.store.append(f"telemetry_{telemetry.robot_id}", telemetry.model_dump())
             return
         if "/ack/" in topic:
-            self.runtime.upsert_ack(payload)
-            robot_id = str(payload.get("robot_id", "unknown"))
-            self.store.append(f"ack_{robot_id}", payload)
+            ack = self.runtime.upsert_ack(payload)
+            robot_id = str(ack.get("robot_id", "unknown"))
+            self.store.append(f"ack_{robot_id}", ack)
             return
         if "/event/" in topic:
             robot_id = str(payload.get("robot_id", "unknown"))
@@ -50,6 +50,7 @@ class AppState:
 
     def publish_command(self, command: CommandEnvelope) -> None:
         topic = f"{self.topic_prefix}/cmd/{command.robot_id}"
+        self.runtime.mark_command_sent(command.cmd_id)
         self.mqtt.publish(topic, command.model_dump())
         self.store.append(f"command_{command.robot_id}", command.model_dump())
 

@@ -14,7 +14,9 @@ const themeSelect = document.getElementById("themeSelect");
 
 const networkChart = document.getElementById("networkChart");
 const networkLegend = document.getElementById("networkLegend");
-const MAX_NETWORK_POINTS = 60;
+const networkSummary = document.getElementById("networkSummary");
+const networkMetricSelect = document.getElementById("networkMetricSelect");
+const MAX_NETWORK_POINTS = 120;
 
 const robotIdInput = document.getElementById("robotId");
 const teleopRobotIdInput = document.getElementById("teleopRobotId");
@@ -55,8 +57,19 @@ function parseRobotIds(text) {
     .filter(Boolean);
 }
 
-function isFiniteNumber(value) {
-  return Number.isFinite(Number(value));
+function finiteOrNaN(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : Number.NaN;
+}
+
+function finiteValues(values) {
+  return values.filter((v) => Number.isFinite(v));
+}
+
+function average(values) {
+  const arr = finiteValues(values);
+  if (!arr.length) return Number.NaN;
+  return arr.reduce((a, b) => a + b, 0) / arr.length;
 }
 
 function setApiBase(nextValue) {
@@ -69,7 +82,7 @@ function applyTheme(themeName) {
   document.body.classList.toggle("theme-cyberpunk", theme === "cyberpunk");
   document.body.classList.toggle("theme-neo", theme === "neo");
   localStorage.setItem("autofleet_theme", theme);
-  themeSelect.value = theme;
+  if (themeSelect) themeSelect.value = theme;
   drawNetworkChart();
 }
 
@@ -83,10 +96,29 @@ async function api(path, options = {}) {
   return body;
 }
 
+function colorForRobot(robotId) {
+  const palette = ["#ff2ea6", "#00d6ff", "#f8ff57", "#7eff96", "#ff8c42", "#b695ff", "#ff5f7f", "#39f0d0"];
+  let hash = 0;
+  for (const ch of robotId) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  return palette[hash % palette.length];
+}
+
+function getLatestSample(robotId) {
+  const series = networkHistory.get(robotId) || [];
+  return series.length ? series[series.length - 1] : null;
+}
+
+function getMaxThroughput(robotId) {
+  const series = networkHistory.get(robotId) || [];
+  const values = finiteValues(series.map((x) => x.throughput_kbps));
+  if (!values.length) return Number.NaN;
+  return Math.max(...values);
+}
+
 function renderRobotTable(items) {
   robotTable.innerHTML = "";
   for (const robot of items) {
-    const net = robot.network || {};
+    const sample = getLatestSample(robot.robot_id);
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${escapeHtml(robot.robot_id)}</td>
@@ -94,7 +126,10 @@ function renderRobotTable(items) {
       <td>${escapeHtml(robot.state ?? "-")}</td>
       <td>${escapeHtml(fmtNum(robot.battery, 3))}</td>
       <td>${escapeHtml(robot.last_seen_age_s ?? "-")}</td>
-      <td>${escapeHtml(isFiniteNumber(net.latency_ms) ? `${fmtNum(net.latency_ms, 1)}ms` : "-")}</td>
+      <td>${escapeHtml(fmtNum(sample?.latency_ms, 1))}ms</td>
+      <td>${escapeHtml(fmtNum(sample?.jitter_ms, 1))}ms</td>
+      <td>${escapeHtml(fmtNum(sample?.throughput_kbps, 0))}kbps</td>
+      <td>${escapeHtml(fmtNum(sample?.control_rtt_ms, 1))}ms</td>
       <td>${escapeHtml(robot.video_rtsp_url ?? "-")}</td>
     `;
     robotTable.appendChild(tr);
@@ -112,8 +147,8 @@ function renderVideoWall(items) {
       const pose = robot.pose || {};
       const controls = robot.controls || {};
       const motors = robot.motors || {};
-      const net = robot.network || {};
       const ack = robot.latest_ack || {};
+      const sample = getLatestSample(robot.robot_id) || {};
       const rtsp = robot.video_rtsp_url || "";
       const streamHtml = buildStreamView(rtsp, robot.robot_id);
       return `
@@ -130,8 +165,8 @@ function renderVideoWall(items) {
           <div class="meta-item"><span class="meta-key">Input(Lin,Ang)</span>${escapeHtml(`${fmtNum(controls.linear_x, 2)}, ${fmtNum(controls.angular_z, 2)}`)}</div>
           <div class="meta-item"><span class="meta-key">Output(L,R RPM)</span>${escapeHtml(`${fmtNum(motors.left_rpm, 1)}, ${fmtNum(motors.right_rpm, 1)}`)}</div>
           <div class="meta-item"><span class="meta-key">Latest ACK</span>${escapeHtml(ack.status ?? "-")}</div>
-          <div class="meta-item"><span class="meta-key">Network(Lat/Loss)</span>${escapeHtml(`${fmtNum(net.latency_ms, 1)}ms / ${fmtNum(net.packet_loss_pct, 1)}%`)}</div>
-          <div class="meta-item"><span class="meta-key">Network(Thr/RSSI)</span>${escapeHtml(`${fmtNum(net.throughput_kbps, 0)}kbps / ${fmtNum(net.rssi_dbm, 1)}dBm`)}</div>
+          <div class="meta-item"><span class="meta-key">Latency / Jitter</span>${escapeHtml(`${fmtNum(sample.latency_ms, 1)}ms / ${fmtNum(sample.jitter_ms, 1)}ms`)}</div>
+          <div class="meta-item"><span class="meta-key">Throughput / RTT</span>${escapeHtml(`${fmtNum(sample.throughput_kbps, 0)}kbps / ${fmtNum(sample.control_rtt_ms, 1)}ms`)}</div>
         </div>
       </article>`;
     })
@@ -163,42 +198,72 @@ function syncDefaultRobotIds(items) {
   if (!followerRobotIdsInput.value.trim()) followerRobotIdsInput.value = ids.slice(1).join(",");
 }
 
-function colorForRobot(robotId) {
-  const palette = ["#ff2ea6", "#00e5ff", "#f4ff61", "#7eff89", "#ff9245", "#b88fff", "#ff5770", "#4cf0cb"];
-  let hash = 0;
-  for (const ch of robotId) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
-  return palette[hash % palette.length];
-}
-
 function updateNetworkHistory(items) {
   const now = Date.now();
   const activeIds = new Set();
+
   for (const robot of items) {
     activeIds.add(robot.robot_id);
-    const latency = Number(robot.network?.latency_ms);
-    if (!Number.isFinite(latency)) continue;
     const series = networkHistory.get(robot.robot_id) || [];
-    series.push({ t: now, latency_ms: latency });
+    const prev = series.length ? series[series.length - 1] : null;
+
+    const latency = finiteOrNaN(robot.network?.latency_ms);
+    const throughput = finiteOrNaN(robot.network?.throughput_kbps);
+    const packetLoss = finiteOrNaN(robot.network?.packet_loss_pct);
+    const rssi = finiteOrNaN(robot.network?.rssi_dbm);
+    const controlRtt = finiteOrNaN(robot.control_rtt_ms);
+    const jitter =
+      Number.isFinite(latency) && prev && Number.isFinite(prev.latency_ms)
+        ? Math.abs(latency - prev.latency_ms)
+        : Number.NaN;
+
+    const sample = {
+      t: now,
+      latency_ms: latency,
+      jitter_ms: jitter,
+      throughput_kbps: throughput,
+      packet_loss_pct: packetLoss,
+      rssi_dbm: rssi,
+      control_rtt_ms: controlRtt,
+    };
+
+    series.push(sample);
     if (series.length > MAX_NETWORK_POINTS) {
       series.splice(0, series.length - MAX_NETWORK_POINTS);
     }
     networkHistory.set(robot.robot_id, series);
   }
 
-  for (const robotId of networkHistory.keys()) {
+  for (const robotId of Array.from(networkHistory.keys())) {
     if (!activeIds.has(robotId)) {
       const series = networkHistory.get(robotId) || [];
       const last = series[series.length - 1];
-      if (!last || now - last.t > 30_000) {
+      if (!last || now - last.t > 60_000) {
         networkHistory.delete(robotId);
       }
     }
   }
 }
 
+function metricConfig(metric) {
+  if (metric === "throughput_kbps") return { label: "Throughput", unit: "kbps", minMax: 300 };
+  if (metric === "packet_loss_pct") return { label: "Packet Loss", unit: "%", minMax: 5 };
+  if (metric === "jitter_ms") return { label: "Jitter", unit: "ms", minMax: 20 };
+  if (metric === "control_rtt_ms") return { label: "Control RTT", unit: "ms", minMax: 40 };
+  return { label: "Latency", unit: "ms", minMax: 80 };
+}
+
 function drawNetworkChart() {
   const ctx = networkChart.getContext("2d");
   if (!ctx) return;
+
+  const metric = networkMetricSelect.value || "latency_ms";
+  const cfg = metricConfig(metric);
+  const isCyber = document.body.classList.contains("theme-cyberpunk");
+  const bg = isCyber ? "#090a14" : "#111111";
+  const grid = isCyber ? "#3e2a67" : "#2b2b2b";
+  const axis = isCyber ? "#ff4fc4" : "#ffffff";
+  const label = isCyber ? "#f5e9ff" : "#f7f7f7";
 
   const rect = networkChart.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
@@ -208,25 +273,21 @@ function drawNetworkChart() {
   networkChart.height = Math.floor(height * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  const padding = { top: 14, right: 14, bottom: 24, left: 40 };
+  const padding = { top: 14, right: 14, bottom: 24, left: 44 };
   const plotW = width - padding.left - padding.right;
   const plotH = height - padding.top - padding.bottom;
-
-  const isCyber = document.body.classList.contains("theme-cyberpunk");
-  const bg = isCyber ? "#090a14" : "#111111";
-  const grid = isCyber ? "#3e2a67" : "#2a2a2a";
-  const axis = isCyber ? "#ff4fc4" : "#ffffff";
-  const label = isCyber ? "#f5e9ff" : "#f3f3f3";
 
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, width, height);
-  ctx.strokeStyle = isCyber ? "#ff4fc4" : "#000000";
+  ctx.strokeStyle = "#000000";
   ctx.lineWidth = 2;
   ctx.strokeRect(0, 0, width, height);
 
-  const allPoints = Array.from(networkHistory.values()).flat();
-  const maxY = Math.max(50, ...allPoints.map((p) => p.latency_ms), 100);
+  const allValues = finiteValues(
+    Array.from(networkHistory.values()).flatMap((series) => series.map((s) => s[metric]))
+  );
+  const maxY = allValues.length ? Math.max(cfg.minMax, ...allValues) : cfg.minMax;
   const minY = 0;
 
   ctx.strokeStyle = grid;
@@ -255,16 +316,16 @@ function drawNetworkChart() {
   ctx.stroke();
 
   const yToPx = (v) => padding.top + ((maxY - v) / (maxY - minY || 1)) * plotH;
-
-  for (const [robotId, points] of Array.from(networkHistory.entries()).sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [robotId, series] of Array.from(networkHistory.entries()).sort(([a], [b]) => a.localeCompare(b))) {
+    const points = series.filter((s) => Number.isFinite(s[metric]));
     if (points.length < 2) continue;
-    const color = colorForRobot(robotId);
-    ctx.strokeStyle = color;
+
+    ctx.strokeStyle = colorForRobot(robotId);
     ctx.lineWidth = 2.2;
     ctx.beginPath();
     for (let i = 0; i < points.length; i += 1) {
       const x = padding.left + (plotW * i) / (MAX_NETWORK_POINTS - 1);
-      const y = yToPx(points[i].latency_ms);
+      const y = yToPx(points[i][metric]);
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
@@ -273,29 +334,57 @@ function drawNetworkChart() {
 
   ctx.fillStyle = label;
   ctx.font = "12px IBM Plex Mono, monospace";
-  ctx.fillText(`${Math.round(maxY)}ms`, 4, padding.top + 10);
-  ctx.fillText("0ms", 8, padding.top + plotH);
+  ctx.fillText(`${cfg.label} (${cfg.unit})`, padding.left + 4, 12);
+  ctx.fillText(`${Math.round(maxY)}${cfg.unit}`, 2, padding.top + 10);
+  ctx.fillText(`0${cfg.unit}`, 8, padding.top + plotH);
   ctx.fillText(`-${Math.round(MAX_NETWORK_POINTS)}s`, padding.left + 2, height - 6);
   ctx.fillText("now", width - 28, height - 6);
 }
 
+function renderNetworkSummary(items) {
+  const latestSamples = items.map((r) => getLatestSample(r.robot_id)).filter(Boolean);
+  const avgLatency = average(latestSamples.map((s) => s.latency_ms));
+  const avgJitter = average(latestSamples.map((s) => s.jitter_ms));
+  const avgLoss = average(latestSamples.map((s) => s.packet_loss_pct));
+  const avgRtt = average(latestSamples.map((s) => s.control_rtt_ms));
+  const totalThroughput = finiteValues(latestSamples.map((s) => s.throughput_kbps)).reduce((a, b) => a + b, 0);
+  const peakThroughput = Math.max(
+    0,
+    ...Array.from(networkHistory.keys()).map((robotId) => getMaxThroughput(robotId)).filter((v) => Number.isFinite(v))
+  );
+  const onlineCount = items.filter((x) => x.online).length;
+
+  networkSummary.innerHTML = `
+    <div class="summary-card"><span>Connected</span><strong>${escapeHtml(onlineCount)}</strong></div>
+    <div class="summary-card"><span>Avg Latency</span><strong>${escapeHtml(fmtNum(avgLatency, 1))} ms</strong></div>
+    <div class="summary-card"><span>Avg Jitter</span><strong>${escapeHtml(fmtNum(avgJitter, 1))} ms</strong></div>
+    <div class="summary-card"><span>Avg Packet Loss</span><strong>${escapeHtml(fmtNum(avgLoss, 2))} %</strong></div>
+    <div class="summary-card"><span>Total Throughput</span><strong>${escapeHtml(fmtNum(totalThroughput, 0))} kbps</strong></div>
+    <div class="summary-card"><span>Peak Throughput</span><strong>${escapeHtml(fmtNum(peakThroughput, 0))} kbps</strong></div>
+    <div class="summary-card"><span>Avg Control RTT</span><strong>${escapeHtml(fmtNum(avgRtt, 1))} ms</strong></div>
+  `;
+}
+
 function renderNetworkLegend(items) {
   if (!items.length) {
-    networkLegend.innerHTML = "";
+    networkLegend.innerHTML = `<div class="legend-item legend-empty">No telemetry yet. Start robot_sim or publish MQTT telemetry.</div>`;
     return;
   }
   networkLegend.innerHTML = items
     .map((robot) => {
-      const net = robot.network || {};
+      const sample = getLatestSample(robot.robot_id) || {};
+      const maxThr = getMaxThroughput(robot.robot_id);
       const color = colorForRobot(robot.robot_id);
       return `
         <div class="legend-item">
           <span class="legend-color" style="background:${escapeHtml(color)}"></span>
           <strong>${escapeHtml(robot.robot_id)}</strong>
-          <span>lat ${escapeHtml(fmtNum(net.latency_ms, 1))}ms</span>
-          <span>loss ${escapeHtml(fmtNum(net.packet_loss_pct, 1))}%</span>
-          <span>thr ${escapeHtml(fmtNum(net.throughput_kbps, 0))}kbps</span>
-          <span>rssi ${escapeHtml(fmtNum(net.rssi_dbm, 1))}dBm</span>
+          <span>lat ${escapeHtml(fmtNum(sample.latency_ms, 1))}ms</span>
+          <span>jit ${escapeHtml(fmtNum(sample.jitter_ms, 1))}ms</span>
+          <span>thr ${escapeHtml(fmtNum(sample.throughput_kbps, 0))}kbps</span>
+          <span>max ${escapeHtml(fmtNum(maxThr, 0))}kbps</span>
+          <span>loss ${escapeHtml(fmtNum(sample.packet_loss_pct, 1))}%</span>
+          <span>rtt ${escapeHtml(fmtNum(sample.control_rtt_ms, 1))}ms</span>
         </div>`;
     })
     .join("");
@@ -304,12 +393,13 @@ function renderNetworkLegend(items) {
 async function refreshRobots({ quiet = false } = {}) {
   const data = await api("/robots");
   robotsCache = data.items || [];
+  updateNetworkHistory(robotsCache);
   renderRobotTable(robotsCache);
   renderVideoWall(robotsCache);
-  syncDefaultRobotIds(robotsCache);
-  updateNetworkHistory(robotsCache);
+  renderNetworkSummary(robotsCache);
   renderNetworkLegend(robotsCache);
   drawNetworkChart();
+  syncDefaultRobotIds(robotsCache);
   if (!quiet) print(data);
 }
 
@@ -443,7 +533,10 @@ document.getElementById("refreshBtn").onclick = async () => {
 };
 
 autoRefreshToggle.onchange = resetAutoRefresh;
-themeSelect.onchange = () => applyTheme(themeSelect.value);
+networkMetricSelect.onchange = drawNetworkChart;
+if (themeSelect) {
+  themeSelect.onchange = (ev) => applyTheme(ev.target.value);
+}
 
 document.getElementById("applyApiBaseBtn").onclick = async () => {
   try {
@@ -553,8 +646,7 @@ document.getElementById("stopMissionBtn").onclick = async () => {
 
 window.addEventListener("resize", () => drawNetworkChart());
 
-const savedTheme = localStorage.getItem("autofleet_theme") || "neo";
-applyTheme(savedTheme);
+applyTheme(localStorage.getItem("autofleet_theme") || "neo");
 resetAutoRefresh();
 refreshRobots().catch((err) => print({ error: String(err) }));
 refreshFormation({ quiet: true }).catch((err) => print({ error: String(err) }));

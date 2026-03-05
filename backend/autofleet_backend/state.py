@@ -14,15 +14,25 @@ class RuntimeState:
     latest_ack: dict[str, dict[str, Any]] = field(default_factory=dict)
     active_missions: dict[str, MissionState] = field(default_factory=dict)
     formation: FormationState = field(default_factory=FormationState)
+    pending_commands_ms: dict[str, int] = field(default_factory=dict)
 
     def upsert_telemetry(self, payload: dict[str, Any]) -> Telemetry:
         telemetry = Telemetry.model_validate({**payload, "raw": payload})
         self.latest_telemetry[telemetry.robot_id] = telemetry
         return telemetry
 
-    def upsert_ack(self, payload: dict[str, Any]) -> None:
+    def mark_command_sent(self, cmd_id: str) -> None:
+        self.pending_commands_ms[cmd_id] = int(time.time() * 1000)
+
+    def upsert_ack(self, payload: dict[str, Any]) -> dict[str, Any]:
+        ack = dict(payload)
+        cmd_id = str(payload.get("cmd_id", ""))
+        sent_ms = self.pending_commands_ms.pop(cmd_id, None) if cmd_id else None
+        if sent_ms is not None:
+            ack["rtt_ms"] = max(0, int(time.time() * 1000) - sent_ms)
         robot_id = str(payload.get("robot_id", "unknown"))
-        self.latest_ack[robot_id] = payload
+        self.latest_ack[robot_id] = ack
+        return ack
 
     def list_robots(self) -> list[dict[str, Any]]:
         now = int(time.time())
@@ -41,6 +51,7 @@ class RuntimeState:
                     "controls": raw.get("controls"),
                     "motors": raw.get("motors"),
                     "network": raw.get("network"),
+                    "control_rtt_ms": (self.latest_ack.get(robot_id) or {}).get("rtt_ms"),
                     "last_seen_ts": telem.ts,
                     "last_seen_age_s": last_seen_age,
                     "online": last_seen_age <= settings.robot_timeout_seconds,

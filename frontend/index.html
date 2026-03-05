@@ -55,7 +55,10 @@
               <th>State</th>
               <th>Battery</th>
               <th>Last Seen(s)</th>
-              <th>Net Latency</th>
+              <th>Latency</th>
+              <th>Jitter</th>
+              <th>Throughput</th>
+              <th>RTT</th>
               <th>RTSP</th>
             </tr>
           </thead>
@@ -67,9 +70,22 @@
     <section class="panel network-panel">
       <div class="section-head">
         <h2>Network Curves</h2>
-        <span class="badge">Latency(ms) per robot</span>
+        <div class="network-controls">
+          <span class="badge">Realtime per robot</span>
+          <label class="inline metric-inline">
+            Metric
+            <select id="networkMetricSelect">
+              <option value="latency_ms">Latency (ms)</option>
+              <option value="jitter_ms">Jitter (ms)</option>
+              <option value="throughput_kbps">Throughput (kbps)</option>
+              <option value="packet_loss_pct">Packet Loss (%)</option>
+              <option value="control_rtt_ms">Control RTT (ms)</option>
+            </select>
+          </label>
+        </div>
       </div>
       <canvas id="networkChart" height="180"></canvas>
+      <div id="networkSummary" class="summary-grid"></div>
       <div id="networkLegend" class="legend"></div>
     </section>
 
