@@ -86,6 +86,10 @@ body {
   align-self: start;
 }
 
+.formation-panel {
+  align-self: start;
+}
+
 .view-diagnostics {
   display: none;
   grid-column: 1 / -1;
