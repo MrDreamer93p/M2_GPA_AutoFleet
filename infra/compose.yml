@@ -1,4 +1,17 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: autofleet-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=autofleet
+      - POSTGRES_USER=autofleet
+      - POSTGRES_PASSWORD=autofleet
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
   mosquitto:
     image: eclipse-mosquitto:2
     container_name: autofleet-mosquitto
@@ -15,17 +28,69 @@ services:
     working_dir: /app
     command: sh -c "pip install --no-cache-dir -r requirements.txt && uvicorn main:app --host 0.0.0.0 --port 8000"
     ports:
-      - "8000:8000"
+      - "${AUTOFLEET_API_PORT:-8000}:8000"
     environment:
       - AUTOFLEET_MQTT_HOST=mosquitto
       - AUTOFLEET_MQTT_PORT=3889
       - AUTOFLEET_LOG_DIR=/app_data/logs
       - AUTOFLEET_RESULT_DIR=/app_data/results
+      - AUTOFLEET_ARTIFACT_DIR=/app_data/artifacts
+      - AUTOFLEET_VIDEO_SNAPSHOT_DIR=/app_data/artifacts/snapshots
+      - AUTOFLEET_ALERT_SNAPSHOT_DIR=/app_data/artifacts/alerts
+      - AUTOFLEET_DATABASE_DSN=postgresql://autofleet:autofleet@postgres:5432/autofleet
+      - AUTOFLEET_VIDEO_PUBLIC_BASE=http://${AUTOFLEET_PUBLIC_HOST:-127.0.0.1}:${AUTOFLEET_VIDEO_PORT:-8400}
+      - AUTOFLEET_VIDEO_WORKER_BASE=http://video-worker:8090
+      - AUTOFLEET_COMMAND_TIMEOUT_MS=1200
+      - AUTOFLEET_COMMAND_RETRY_LIMIT=1
     volumes:
       - ../backend:/app:rw
       - ../data:/app_data:rw
     depends_on:
       - mosquitto
+      - postgres
+      - video-worker
+
+  video-worker:
+    image: python:3.11-slim
+    container_name: autofleet-video-worker
+    restart: unless-stopped
+    working_dir: /worker
+    command: sh -c "pip install --no-cache-dir -r requirements.txt && uvicorn main:app --host 0.0.0.0 --port 8090"
+    ports:
+      - "${AUTOFLEET_VIDEO_PORT:-8400}:8090"
+    environment:
+      - AUTOFLEET_MQTT_HOST=mosquitto
+      - AUTOFLEET_MQTT_PORT=3889
+      - AUTOFLEET_TOPIC_PREFIX=fleet/v1
+      - AUTOFLEET_VIDEO_PUBLIC_BASE=http://${AUTOFLEET_PUBLIC_HOST:-127.0.0.1}:${AUTOFLEET_VIDEO_PORT:-8400}
+      - AUTOFLEET_VIDEO_SNAPSHOT_DIR=/artifacts/snapshots
+      - AUTOFLEET_HEARTBEAT_INTERVAL_MS=2000
+    volumes:
+      - ../workers/video_worker:/worker:rw
+      - ../data/artifacts:/artifacts:rw
+    depends_on:
+      - mosquitto
+
+  perception-worker:
+    image: python:3.11-slim
+    container_name: autofleet-perception-worker
+    restart: unless-stopped
+    working_dir: /worker
+    command: sh -c "pip install --no-cache-dir -r requirements.txt && python main.py"
+    environment:
+      - AUTOFLEET_MQTT_HOST=mosquitto
+      - AUTOFLEET_MQTT_PORT=3889
+      - AUTOFLEET_TOPIC_PREFIX=fleet/v1
+      - AUTOFLEET_VIDEO_WORKER_BASE=http://video-worker:8090
+      - AUTOFLEET_ALERT_SNAPSHOT_DIR=/artifacts/alerts
+      - AUTOFLEET_HEARTBEAT_INTERVAL_MS=2000
+      - AUTOFLEET_PERCEPTION_INTERVAL_MS=2500
+    volumes:
+      - ../workers/perception_worker:/worker:rw
+      - ../data/artifacts:/artifacts:rw
+    depends_on:
+      - mosquitto
+      - video-worker
 
   frontend:
     image: python:3.11-slim
@@ -37,3 +102,6 @@ services:
       - "3000:3000"
     volumes:
       - ../frontend:/site:ro
+
+volumes:
+  pgdata:

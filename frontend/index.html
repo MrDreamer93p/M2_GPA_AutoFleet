@@ -64,6 +64,14 @@
       </div>
     </section>
 
+    <section class="panel overview-panel view-control">
+      <div class="section-head">
+        <h2>Fleet Overview</h2>
+        <span class="badge">Communication + perception</span>
+      </div>
+      <div id="fleetOverview" class="summary-grid"></div>
+    </section>
+
     <section class="panel control-panel view-control">
       <h2>Teleop (Keyboard)</h2>
       <label>Control Robot ID <input id="teleopRobotId" value="R1"></label>
@@ -114,9 +122,18 @@
     <section class="panel video-panel view-control">
       <div class="section-head">
         <h2>Video Wall</h2>
-        <span class="badge">All connected robots</span>
+        <span class="badge">Browser-playable streams</span>
       </div>
       <div id="videoWall" class="video-wall"></div>
+    </section>
+
+    <section class="panel risk-panel view-control">
+      <div class="section-head">
+        <h2>Spatial Risk</h2>
+        <span class="badge">Obstacles + coordination</span>
+      </div>
+      <div id="riskMap" class="risk-map"></div>
+      <div id="mapSummaryGrid" class="summary-grid"></div>
     </section>
 
     <section class="panel command-panel view-control">
@@ -142,6 +159,23 @@
     <section class="panel output-panel view-control">
       <h2>Output</h2>
       <pre id="output"></pre>
+    </section>
+
+    <section class="panel alerts-panel view-control">
+      <div class="section-head">
+        <h2>Active Alerts</h2>
+        <span class="badge">Danger perception</span>
+      </div>
+      <div id="alertList" class="alert-list"></div>
+    </section>
+
+    <section class="panel protocol-panel view-control">
+      <div class="section-head">
+        <h2>Protocol Status</h2>
+        <span class="badge">V2X runtime</span>
+      </div>
+      <div id="protocolSummary" class="summary-grid"></div>
+      <pre id="protocolOutput"></pre>
     </section>
 
     <section class="panel diagnostics-panel view-diagnostics">

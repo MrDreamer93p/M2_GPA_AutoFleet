@@ -54,6 +54,7 @@ class Simulator:
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
         self.running = True
+        self.last_heartbeat_sent = {rid: 0 for rid in robot_ids}
 
     def on_connect(self, client: mqtt.Client, *_):
         client.subscribe(f"{self.prefix}/cmd/+")
@@ -131,6 +132,7 @@ class Simulator:
 
                 payload = {
                     "v": 1,
+                    "schema": "autofleet.telemetry.v1",
                     "robot_id": robot.robot_id,
                     "ts": now_ts(),
                     "pose": {"x": round(robot.x, 3), "y": round(robot.y, 3), "yaw": round(robot.yaw, 3)},
@@ -151,6 +153,24 @@ class Simulator:
                     },
                 }
                 self.client.publish(f"{self.prefix}/telemetry/{robot.robot_id}", json.dumps(payload), qos=0)
+                now = now_ts()
+                if now - self.last_heartbeat_sent[robot.robot_id] >= 1:
+                    heartbeat = {
+                        "v": 1,
+                        "schema": "autofleet.heartbeat.v1",
+                        "source_id": robot.robot_id,
+                        "source_type": "robot",
+                        "robot_id": robot.robot_id,
+                        "status": "OK",
+                        "ts": now,
+                        "meta": {
+                            "battery": round(robot.battery, 3),
+                            "state": robot.state,
+                            "video_rtsp_url": robot.video_rtsp_url,
+                        },
+                    }
+                    self.client.publish(f"{self.prefix}/heartbeat/{robot.robot_id}", json.dumps(heartbeat), qos=0)
+                    self.last_heartbeat_sent[robot.robot_id] = now
             time.sleep(0.2)
 
     def run(self):

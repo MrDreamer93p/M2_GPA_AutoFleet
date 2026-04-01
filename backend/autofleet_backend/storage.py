@@ -17,8 +17,10 @@ class JsonlStore:
     def __init__(self, log_dir: str = settings.log_dir, result_dir: str = settings.result_dir) -> None:
         self.log_dir = Path(log_dir)
         self.result_dir = Path(result_dir)
+        self.artifact_dir = Path(settings.artifact_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.result_dir.mkdir(parents=True, exist_ok=True)
+        self.artifact_dir.mkdir(parents=True, exist_ok=True)
 
     def append(self, stream_name: str, payload: dict[str, Any]) -> None:
         target = self.log_dir / f"{stream_name}.jsonl"
