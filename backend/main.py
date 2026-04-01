@@ -4,11 +4,17 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from autofleet_backend.app_state import AppState
-from autofleet_backend.models import CommandRequest, FormationFollowStartRequest, MissionStartRequest, TeleopRequest
+from autofleet_backend.models import (
+    AlertAckRequest,
+    CommandRequest,
+    FormationFollowStartRequest,
+    MissionStartRequest,
+    TeleopRequest,
+)
 
 
 state = AppState()
@@ -17,13 +23,15 @@ state = AppState()
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     state.mqtt.connect()
+    state.start_background()
     try:
         yield
     finally:
+        state.stop_background()
         state.mqtt.disconnect()
 
 
-app = FastAPI(title="AutoFleet Backend", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="AutoFleet Backend", version="0.2.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -33,27 +41,60 @@ app.add_middleware(
 )
 
 
+def reconcile() -> None:
+    state.reconcile_protocol()
+
+
 @app.get("/api/v1/health")
 def health() -> dict[str, Any]:
-    return {"status": "ok", "ts": int(time.time())}
+    reconcile()
+    return {
+        "status": "ok",
+        "ts": int(time.time()),
+        "mqtt_connected": state.mqtt.is_connected(),
+        "database_enabled": state.pg.enabled,
+        "database_available": state.pg.available,
+        "protocol": state.runtime.protocol_status(),
+    }
+
+
+@app.get("/api/v1/protocol")
+def protocol_spec() -> dict[str, Any]:
+    return state.protocol_spec()
 
 
 @app.get("/api/v1/robots")
 def list_robots() -> dict[str, Any]:
+    reconcile()
     return {"items": state.runtime.list_robots()}
 
 
 @app.get("/api/v1/robots/{robot_id}/latest")
 def get_robot_latest(robot_id: str) -> dict[str, Any]:
+    reconcile()
     latest = state.runtime.get_robot_latest(robot_id)
     if latest is None:
         raise HTTPException(status_code=404, detail=f"Robot {robot_id} not found")
     return latest
 
 
+@app.get("/api/v1/robots/{robot_id}/history")
+def get_robot_history(robot_id: str) -> dict[str, Any]:
+    latest = state.runtime.get_robot_latest(robot_id)
+    if latest is None:
+        raise HTTPException(status_code=404, detail=f"Robot {robot_id} not found")
+    return {"items": state.runtime.get_recent_telemetry(robot_id)}
+
+
 @app.post("/api/v1/robots/{robot_id}/command")
 def post_command(robot_id: str, req: CommandRequest) -> dict[str, Any]:
-    envelope = state.build_command(robot_id=robot_id, kind=req.type, args=req.args, ttl_ms=req.ttl_ms)
+    envelope = state.build_command(
+        robot_id=robot_id,
+        kind=req.type,
+        args=req.args,
+        ttl_ms=req.ttl_ms,
+        correlation_id=req.correlation_id,
+    )
     state.publish_command(envelope)
     return {"published": True, "command": envelope.model_dump()}
 
@@ -88,6 +129,11 @@ def start_mission(req: MissionStartRequest) -> dict[str, Any]:
         state.publish_command(envelope)
 
     return {"mission": mission.model_dump(), "status": "RUNNING"}
+
+
+@app.get("/api/v1/missions")
+def list_missions() -> dict[str, Any]:
+    return {"items": state.runtime.list_missions()}
 
 
 @app.post("/api/v1/missions/{mission_id}/stop")
@@ -149,3 +195,46 @@ def start_follow_formation(req: FormationFollowStartRequest) -> dict[str, Any]:
 def stop_follow_formation() -> dict[str, Any]:
     formation = state.stop_follow_formation()
     return {"formation": formation.model_dump()}
+
+
+@app.get("/api/v1/alerts")
+def list_alerts(
+    active_only: bool = Query(default=False),
+    robot_id: str | None = Query(default=None),
+) -> dict[str, Any]:
+    reconcile()
+    return {"items": state.runtime.list_alerts(active_only=active_only, robot_id=robot_id)}
+
+
+@app.post("/api/v1/alerts/{alert_id}/ack")
+def acknowledge_alert(alert_id: str, req: AlertAckRequest) -> dict[str, Any]:
+    updated = state.acknowledge_alert(alert_id, req.status)
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"Alert {alert_id} not found")
+    return {"alert": updated}
+
+
+@app.get("/api/v1/video/streams")
+def list_video_streams() -> dict[str, Any]:
+    return {"items": state.runtime.list_video_streams()}
+
+
+@app.get("/api/v1/perception")
+def list_perception() -> dict[str, Any]:
+    return {"items": [robot.get("latest_perception") for robot in state.runtime.list_robots() if robot.get("latest_perception")]}
+
+
+@app.get("/api/v1/map/summaries")
+def list_map_summaries() -> dict[str, Any]:
+    return {"items": state.runtime.list_map_summaries()}
+
+
+@app.get("/api/v1/coordination")
+def list_coordination() -> dict[str, Any]:
+    return {"items": state.runtime.coordination_summaries()}
+
+
+@app.get("/api/v1/events")
+def list_events(limit: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:
+    return {"items": state.runtime.list_events(limit=limit)}
+

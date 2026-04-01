@@ -1,11 +1,23 @@
 const defaultHost = window.location.hostname || "127.0.0.1";
 const defaultProto = window.location.protocol === "https:" ? "https:" : "http:";
-const defaultApiBase = `${defaultProto}//${defaultHost}:8000/api/v1`;
-let apiBase = localStorage.getItem("autofleet_api_base") || defaultApiBase;
+const defaultApiBases = [
+  `${defaultProto}//${defaultHost}:8000/api/v1`,
+  `${defaultProto}//${defaultHost}:8200/api/v1`,
+  `${defaultProto}//${defaultHost}:8001/api/v1`,
+];
+const savedApiBase = (localStorage.getItem("autofleet_api_base") || "").replace(/\/+$/, "");
+const hasPinnedApiBase = Boolean(savedApiBase) && !defaultApiBases.includes(savedApiBase);
+let apiBase = savedApiBase || defaultApiBases[0];
 
 const output = document.getElementById("output");
 const robotTable = document.getElementById("robotTable");
 const videoWall = document.getElementById("videoWall");
+const fleetOverview = document.getElementById("fleetOverview");
+const riskMap = document.getElementById("riskMap");
+const mapSummaryGrid = document.getElementById("mapSummaryGrid");
+const alertList = document.getElementById("alertList");
+const protocolSummary = document.getElementById("protocolSummary");
+const protocolOutput = document.getElementById("protocolOutput");
 const formationStatus = document.getElementById("formationStatus");
 const teleopStatus = document.getElementById("teleopStatus");
 const apiBaseInput = document.getElementById("apiBase");
@@ -39,6 +51,10 @@ const followerRobotIdsInput = document.getElementById("followerRobotIds");
 apiBaseInput.value = apiBase;
 
 let robotsCache = [];
+let alertsCache = [];
+let healthCache = null;
+let protocolSpecCache = null;
+let eventsCache = [];
 let refreshTimer = null;
 let teleopTimer = null;
 let activeKeys = new Set();
@@ -131,9 +147,48 @@ function formatTs(tsMs) {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+function riskColor(level) {
+  if (level === "CRITICAL") return "#ff6ea8";
+  if (level === "HIGH") return "#ff9a4d";
+  if (level === "MEDIUM") return "#ffd95b";
+  if (level === "LOW") return "#90d8ff";
+  return "#7eff96";
+}
+
+function severityClass(level) {
+  return level === "critical" || level === "CRITICAL" ? "critical" : level === "warning" || level === "HIGH" ? "warning" : "ok";
+}
+
+function highestRobotRisk(robot) {
+  const alertSeverity = (robot.recent_alerts || []).some((x) => x.severity === "critical") ? "CRITICAL" : null;
+  return alertSeverity || robot.latest_perception?.risk_level || robot.map_summary?.risk_level || robot.coordination?.collision_risk || "NONE";
+}
+
 function setApiBase(nextValue) {
   apiBase = nextValue.replace(/\/+$/, "");
   localStorage.setItem("autofleet_api_base", apiBase);
+}
+
+function uniqueApiBases(values) {
+  return Array.from(new Set(values.map((value) => String(value || "").replace(/\/+$/, "")).filter(Boolean)));
+}
+
+async function fetchWithApiFallback(path, options = {}) {
+  const candidates = hasPinnedApiBase ? [apiBase] : uniqueApiBases([apiBase, ...defaultApiBases]);
+  let lastError = null;
+  for (const candidate of candidates) {
+    try {
+      const res = await fetch(`${candidate}${path}`, options);
+      if (candidate !== apiBase) {
+        setApiBase(candidate);
+        apiBaseInput.value = candidate;
+      }
+      return res;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error(`Unable to reach API for ${path}`);
 }
 
 function applyNeoTheme() {
@@ -143,7 +198,7 @@ function applyNeoTheme() {
 }
 
 async function api(path, options = {}) {
-  const res = await fetch(`${apiBase}${path}`, {
+  const res = await fetchWithApiFallback(path, {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
@@ -154,7 +209,7 @@ async function api(path, options = {}) {
 
 async function timedGet(path) {
   const started = performance.now();
-  const res = await fetch(`${apiBase}${path}`, {
+  const res = await fetchWithApiFallback(path, {
     method: "GET",
     headers: { "Content-Type": "application/json" },
   });
@@ -216,7 +271,7 @@ function renderRobotTable(items) {
       <td>${escapeHtml(fmtNum(sample?.jitter_ms, 1))}ms</td>
       <td>${escapeHtml(fmtNum(sample?.throughput_kbps, 0))}kbps</td>
       <td>${escapeHtml(fmtNum(sample?.control_rtt_ms, 1))}ms</td>
-      <td>${escapeHtml(robot.video_rtsp_url ?? "-")}</td>
+      <td>${escapeHtml(robot.video_status?.proxy_url || robot.video_rtsp_url || "-")}</td>
     `;
     robotTable.appendChild(tr);
   }
@@ -235,8 +290,20 @@ function renderVideoWall(items) {
       const motors = robot.motors || {};
       const ack = robot.latest_ack || {};
       const sample = getLatestSample(robot.robot_id) || {};
-      const rtsp = robot.video_rtsp_url || "";
-      const streamHtml = buildStreamView(rtsp, robot.robot_id);
+      const streamHtml = buildStreamView(robot);
+      const detections = robot.latest_perception?.detections || [];
+      const risk = highestRobotRisk(robot);
+      const streamState = robot.video_status?.status || "offline";
+      const flags = [
+        `<span class="flag-pill ${severityClass(streamState === "online" ? "ok" : "warning")}">stream ${escapeHtml(streamState)}</span>`,
+        `<span class="flag-pill ${severityClass(risk)}">risk ${escapeHtml(risk)}</span>`,
+      ]
+        .concat(
+          detections.slice(0, 3).map(
+            (d) => `<span class="flag-pill ${severityClass(d.severity)}">${escapeHtml(d.label)}</span>`
+          )
+        )
+        .join("");
       return `
       <article class="video-card">
         <div class="video-card-head">
@@ -253,25 +320,36 @@ function renderVideoWall(items) {
           <div class="meta-item"><span class="meta-key">Latest ACK</span>${escapeHtml(ack.status ?? "-")}</div>
           <div class="meta-item"><span class="meta-key">Latency / Jitter</span>${escapeHtml(`${fmtNum(sample.latency_ms, 1)}ms / ${fmtNum(sample.jitter_ms, 1)}ms`)}</div>
           <div class="meta-item"><span class="meta-key">Throughput / RTT</span>${escapeHtml(`${fmtNum(sample.throughput_kbps, 0)}kbps / ${fmtNum(sample.control_rtt_ms, 1)}ms`)}</div>
+          <div class="meta-item"><span class="meta-key">Perception</span>${escapeHtml(detections.length ? detections.map((d) => d.label).join(", ") : "no detection")}</div>
+          <div class="meta-item"><span class="meta-key">Obstacles / Stream</span>${escapeHtml(`${robot.latest_perception?.obstacle_count ?? 0} / ${streamState}`)}</div>
         </div>
+        <div class="video-flags">${flags}</div>
       </article>`;
     })
     .join("");
 }
 
-function buildStreamView(streamUrl, robotId) {
-  if (!streamUrl) {
-    return "No stream URL in telemetry.";
+function buildStreamView(robot) {
+  const proxyUrl = robot.video_status?.proxy_url || "";
+  const snapshotUrl = robot.video_status?.snapshot_url || "";
+  const rtspUrl = robot.video_rtsp_url || "";
+  const note = robot.video_status?.note || "";
+  if (proxyUrl) {
+    return `<img class="mjpeg-stream" src="${escapeHtml(proxyUrl)}" alt="Live stream for ${escapeHtml(robot.robot_id)}">`;
   }
-  const lowered = streamUrl.toLowerCase();
-  const escaped = escapeHtml(streamUrl);
-  if (lowered.startsWith("http://") || lowered.startsWith("https://")) {
-    return `<video controls muted autoplay playsinline src="${escaped}"></video>`;
+  if (snapshotUrl) {
+    return `<img class="snapshot-thumb" src="${escapeHtml(snapshotUrl)}" alt="Snapshot for ${escapeHtml(robot.robot_id)}">`;
   }
-  if (lowered.startsWith("rtsp://")) {
-    return `RTSP stream for ${escapeHtml(robotId)}<br><a class="rtsp-link" href="${escaped}" target="_blank" rel="noopener">Open ${escaped}</a><br>Browser usually cannot play RTSP directly.`;
+  if (rtspUrl) {
+    return `
+      <div class="stream-note">
+        <div>Source registered for ${escapeHtml(robot.robot_id)}, waiting for proxy stream.</div>
+        <a class="rtsp-link" href="${escapeHtml(rtspUrl)}" target="_blank" rel="noopener">Open ${escapeHtml(rtspUrl)}</a>
+        <div>${escapeHtml(note || "Video worker has not published a proxy URL yet.")}</div>
+      </div>
+    `;
   }
-  return `Unsupported stream URL: ${escaped}`;
+  return `<div class="stream-note">No stream URL in telemetry yet.</div>`;
 }
 
 function syncDefaultRobotIds(items) {
@@ -473,6 +551,191 @@ function renderNetworkLegend(items) {
         </div>`;
     })
     .join("");
+}
+
+function renderFleetOverview(items) {
+  if (!fleetOverview) return;
+  const onlineCount = items.filter((x) => x.online).length;
+  const avgBattery = average(items.map((x) => Number(x.battery) * 100));
+  const activeAlerts = alertsCache.length;
+  const criticalAlerts = alertsCache.filter((x) => x.severity === "critical").length;
+  const proxiedStreams = items.filter((x) => x.video_status?.proxy_url).length;
+  const highRisk = items.filter((x) => ["HIGH", "CRITICAL"].includes(highestRobotRisk(x))).length;
+  const services = healthCache?.protocol?.service_heartbeats_age_s || {};
+  const healthyServices = Object.values(services).filter((age) => Number(age) <= 10).length;
+  const collisionRisk = items.filter((x) => ["HIGH", "CRITICAL"].includes(x.coordination?.collision_risk)).length;
+
+  fleetOverview.innerHTML = `
+    <div class="summary-card"><span>Connected Robots</span><strong>${escapeHtml(onlineCount)}/${escapeHtml(items.length)}</strong></div>
+    <div class="summary-card"><span>Avg Battery</span><strong>${escapeHtml(fmtNum(avgBattery, 1))}%</strong></div>
+    <div class="summary-card"><span>Live Video Proxies</span><strong>${escapeHtml(proxiedStreams)}</strong></div>
+    <div class="summary-card"><span>Active Alerts</span><strong>${escapeHtml(activeAlerts)}</strong></div>
+    <div class="summary-card"><span>Critical Alerts</span><strong>${escapeHtml(criticalAlerts)}</strong></div>
+    <div class="summary-card"><span>High-risk Robots</span><strong>${escapeHtml(highRisk)}</strong></div>
+    <div class="summary-card"><span>Collision Risk Robots</span><strong>${escapeHtml(collisionRisk)}</strong></div>
+    <div class="summary-card"><span>Healthy Services</span><strong>${escapeHtml(healthyServices)}/${escapeHtml(Object.keys(services).length || 0)}</strong></div>
+  `;
+}
+
+function renderMapSummaryGrid(items) {
+  if (!mapSummaryGrid) return;
+  if (!items.length) {
+    mapSummaryGrid.innerHTML = "";
+    return;
+  }
+  mapSummaryGrid.innerHTML = items
+    .map((robot) => {
+      const map = robot.map_summary || {};
+      const coord = robot.coordination || {};
+      return `
+        <div class="summary-card">
+          <span>${escapeHtml(robot.robot_id)}</span>
+          <strong>${escapeHtml(map.obstacle_count ?? 0)} obstacle(s)</strong>
+          <div>${escapeHtml(`map risk ${map.risk_level || "NONE"}`)}</div>
+          <div>${escapeHtml(`role ${coord.role || "independent"}`)}</div>
+          <div>${escapeHtml(`min peer ${fmtNum(coord.min_peer_distance_m, 2)} m`)}</div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function renderRiskMap(items) {
+  if (!riskMap) return;
+  const robots = items.filter((robot) => Number.isFinite(Number(robot.pose?.x)) && Number.isFinite(Number(robot.pose?.y)));
+  if (!robots.length) {
+    riskMap.innerHTML = `<div class="risk-map-empty">No robot positions yet. Publish telemetry to populate the spatial view.</div>`;
+    return;
+  }
+
+  const xs = robots.map((robot) => Number(robot.pose.x));
+  const ys = robots.map((robot) => Number(robot.pose.y));
+  const minX = Math.min(...xs) - 1;
+  const maxX = Math.max(...xs) + 1;
+  const minY = Math.min(...ys) - 1;
+  const maxY = Math.max(...ys) + 1;
+  const width = 620;
+  const height = 286;
+  const scaleX = (x) => 30 + ((x - minX) / Math.max(1, maxX - minX)) * (width - 60);
+  const scaleY = (y) => height - 30 - ((y - minY) / Math.max(1, maxY - minY)) * (height - 60);
+
+  const obstacleMarks = robots
+    .flatMap((robot) =>
+      (robot.map_summary?.obstacles || []).map((obs) => {
+        const px = scaleX(Number(obs.x || robot.pose.x));
+        const py = scaleY(Number(obs.y || robot.pose.y));
+        return `<rect x="${px - 8}" y="${py - 8}" width="16" height="16" fill="${riskColor(robot.map_summary?.risk_level || "MEDIUM")}" stroke="#fff" stroke-width="2" />`;
+      })
+    )
+    .join("");
+
+  const robotMarks = robots
+    .map((robot) => {
+      const px = scaleX(Number(robot.pose.x));
+      const py = scaleY(Number(robot.pose.y));
+      const risk = highestRobotRisk(robot);
+      const ring = ["HIGH", "CRITICAL"].includes(risk)
+        ? `<circle cx="${px}" cy="${py}" r="24" fill="none" stroke="${riskColor(risk)}" stroke-width="4" stroke-dasharray="5 4" />`
+        : "";
+      return `
+        ${ring}
+        <circle cx="${px}" cy="${py}" r="13" fill="${riskColor(risk)}" stroke="#ffffff" stroke-width="3" />
+        <text x="${px + 16}" y="${py - 12}" fill="#ffffff" font-size="12" font-family="IBM Plex Mono, monospace">${escapeHtml(robot.robot_id)}</text>
+        <text x="${px + 16}" y="${py + 6}" fill="#bbbbbb" font-size="10" font-family="IBM Plex Mono, monospace">${escapeHtml(robot.coordination?.role || "independent")}</text>
+      `;
+    })
+    .join("");
+
+  const links = robots
+    .flatMap((robot) =>
+      (robot.coordination?.neighbors || [])
+        .slice(0, 1)
+        .map((neighbor) => {
+          const peer = robots.find((item) => item.robot_id === neighbor.robot_id);
+          if (!peer) return "";
+          return `<line x1="${scaleX(Number(robot.pose.x))}" y1="${scaleY(Number(robot.pose.y))}" x2="${scaleX(Number(peer.pose.x))}" y2="${scaleY(Number(peer.pose.y))}" stroke="${riskColor(neighbor.risk_level)}" stroke-width="2" stroke-dasharray="6 5" />`;
+        })
+    )
+    .join("");
+
+  riskMap.innerHTML = `
+    <svg class="risk-stage" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
+      <rect x="0" y="0" width="${width}" height="${height}" fill="#0d0d0d" />
+      <g stroke="#303030" stroke-width="1">
+        <line x1="30" y1="30" x2="30" y2="${height - 30}" />
+        <line x1="30" y1="${height - 30}" x2="${width - 30}" y2="${height - 30}" />
+        <line x1="30" y1="${height / 2}" x2="${width - 30}" y2="${height / 2}" />
+        <line x1="${width / 2}" y1="30" x2="${width / 2}" y2="${height - 30}" />
+      </g>
+      ${links}
+      ${obstacleMarks}
+      ${robotMarks}
+    </svg>
+    <div class="risk-legend">
+      <div class="risk-legend-item"><span class="risk-dot" style="background:${riskColor("LOW")}"></span>Low</div>
+      <div class="risk-legend-item"><span class="risk-dot" style="background:${riskColor("MEDIUM")}"></span>Medium</div>
+      <div class="risk-legend-item"><span class="risk-dot" style="background:${riskColor("HIGH")}"></span>High</div>
+      <div class="risk-legend-item"><span class="risk-dot" style="background:${riskColor("CRITICAL")}"></span>Critical</div>
+    </div>
+  `;
+}
+
+function renderAlertList(alerts) {
+  if (!alertList) return;
+  if (!alerts.length) {
+    alertList.innerHTML = `<div class="video-empty">No active alerts. Perception worker has not raised any hazard yet.</div>`;
+    return;
+  }
+  alertList.innerHTML = alerts
+    .map(
+      (alert) => `
+        <article class="alert-card ${severityClass(alert.severity)}">
+          <div class="alert-head">
+            <strong>${escapeHtml(alert.alert_type)}</strong>
+            <button class="btn subtle ack-btn" data-alert-id="${escapeHtml(alert.alert_id)}">Acknowledge</button>
+          </div>
+          <div>${escapeHtml(alert.message)}</div>
+          <div class="alert-meta">${escapeHtml(`${alert.robot_id} | ${alert.severity} | ${formatTs((alert.ts || 0) * 1000)}`)}</div>
+          <div class="alert-meta">${escapeHtml((alert.metadata?.detection_labels || []).join(", ") || "no labels")}</div>
+        </article>
+      `
+    )
+    .join("");
+}
+
+function renderProtocolSummary(items) {
+  if (!protocolSummary || !protocolOutput) return;
+  const protocol = healthCache?.protocol || {};
+  const topics = Object.keys(protocolSpecCache?.topics || {}).length;
+  const serviceAges = protocol.service_heartbeats_age_s || {};
+  const robotAges = protocol.robot_heartbeats_age_s || {};
+  const slowestService = Object.entries(serviceAges).sort((a, b) => Number(b[1]) - Number(a[1]))[0];
+
+  protocolSummary.innerHTML = `
+    <div class="summary-card"><span>Schema Version</span><strong>${escapeHtml(protocol.schema_version || protocolSpecCache?.schema_version || "-")}</strong></div>
+    <div class="summary-card"><span>Topic Families</span><strong>${escapeHtml(topics)}</strong></div>
+    <div class="summary-card"><span>Pending Commands</span><strong>${escapeHtml(protocol.pending_commands ?? 0)}</strong></div>
+    <div class="summary-card"><span>Robot Heartbeats</span><strong>${escapeHtml(Object.keys(robotAges).length)}</strong></div>
+    <div class="summary-card"><span>Service Heartbeats</span><strong>${escapeHtml(Object.keys(serviceAges).length)}</strong></div>
+    <div class="summary-card"><span>Active Alerts</span><strong>${escapeHtml(protocol.active_alerts ?? 0)}</strong></div>
+    <div class="summary-card"><span>Collision Risk</span><strong>${escapeHtml(protocol.high_collision_risk_robots ?? 0)}</strong></div>
+    <div class="summary-card"><span>Slowest Service</span><strong>${escapeHtml(slowestService ? `${slowestService[0]} ${slowestService[1]}s` : "-")}</strong></div>
+  `;
+  protocolOutput.textContent = JSON.stringify(
+    {
+      health: healthCache,
+      protocol_spec: protocolSpecCache,
+      recent_events: eventsCache,
+      robots: items.map((robot) => ({
+        robot_id: robot.robot_id,
+        coordination: robot.coordination,
+        alerts: robot.recent_alerts,
+        video_status: robot.video_status,
+      })),
+    },
+    null,
+    2
+  );
 }
 
 function setDiagStatus(text) {
@@ -893,16 +1156,39 @@ function setView(mode) {
 }
 
 async function refreshRobots({ quiet = false } = {}) {
-  const data = await api("/robots");
-  robotsCache = data.items || [];
+  const [robotsData, alertsData, healthData, protocolData, eventsData] = await Promise.all([
+    api("/robots"),
+    api("/alerts?active_only=true"),
+    api("/health"),
+    api("/protocol"),
+    api("/events?limit=20"),
+  ]);
+  robotsCache = robotsData.items || [];
+  alertsCache = alertsData.items || [];
+  healthCache = healthData;
+  protocolSpecCache = protocolData;
+  eventsCache = eventsData.items || [];
   updateNetworkHistory(robotsCache);
   renderRobotTable(robotsCache);
   renderVideoWall(robotsCache);
   renderNetworkSummary(robotsCache);
   renderNetworkLegend(robotsCache);
+  renderFleetOverview(robotsCache);
+  renderMapSummaryGrid(robotsCache);
+  renderRiskMap(robotsCache);
+  renderAlertList(alertsCache);
+  renderProtocolSummary(robotsCache);
   drawNetworkChart();
   syncDefaultRobotIds(robotsCache);
-  if (!quiet) print(data);
+  if (!quiet) {
+    print({
+      robots: robotsData,
+      alerts: alertsData,
+      health: healthData,
+      protocol: protocolData,
+      events: eventsData,
+    });
+  }
 }
 
 async function refreshFormation({ quiet = true } = {}) {
@@ -1118,6 +1404,24 @@ document.getElementById("stopFollowBtn").onclick = async () => {
     print({ error: String(err) });
   }
 };
+
+if (alertList) {
+  alertList.addEventListener("click", async (ev) => {
+    const btn = ev.target.closest("[data-alert-id]");
+    if (!btn) return;
+    const alertId = btn.getAttribute("data-alert-id");
+    if (!alertId) return;
+    try {
+      await api(`/alerts/${encodeURIComponent(alertId)}/ack`, {
+        method: "POST",
+        body: JSON.stringify({ status: "acknowledged" }),
+      });
+      await refreshRobots({ quiet: true });
+    } catch (err) {
+      print({ error: String(err) });
+    }
+  });
+}
 
 document.getElementById("sendCmdBtn").onclick = async () => {
   try {
