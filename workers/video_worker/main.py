@@ -41,6 +41,7 @@ class StreamRegistry:
                 {
                     "robot_id": robot_id,
                     "video_rtsp_url": payload.get("video_rtsp_url"),
+                    "video_view_profile": payload.get("video_view_profile"),
                     "state": payload.get("state"),
                     "battery": payload.get("battery"),
                     "pose": payload.get("pose"),
@@ -74,6 +75,7 @@ class StreamRegistry:
                         "robot_id": robot_id,
                         "source_url": entry.get("video_rtsp_url"),
                         "state": entry.get("state"),
+                        "view_profile": entry.get("video_view_profile"),
                         "status": status.get("status", "offline"),
                         "proxy_url": status.get("proxy_url"),
                         "snapshot_url": status.get("snapshot_url"),
@@ -89,32 +91,98 @@ class FrameProvider:
     def __init__(self, registry: StreamRegistry) -> None:
         self.registry = registry
         self._lock = threading.Lock()
-        self._captures: dict[str, tuple[str, cv2.VideoCapture]] = {}
+        self._captures: dict[str, tuple[str, str, cv2.VideoCapture]] = {}
 
     def _release_capture(self, robot_id: str) -> None:
         with self._lock:
             existing = self._captures.pop(robot_id, None)
         if existing:
-            _, cap = existing
+            _, _, cap = existing
             cap.release()
 
-    def _get_capture(self, robot_id: str, source_url: str | None) -> cv2.VideoCapture | None:
-        if not source_url or not source_url.lower().startswith("rtsp://"):
+    def _resolve_source(self, source_url: str | None) -> tuple[str, str, str | int] | None:
+        raw = str(source_url or "").strip()
+        if not raw:
             return None
-        with self._lock:
-            existing = self._captures.get(robot_id)
-            if existing and existing[0] == source_url and existing[1].isOpened():
-                return existing[1]
-        cap = cv2.VideoCapture(source_url)
+        lower = raw.lower()
+        if lower.startswith("rtsp://"):
+            return raw, "rtsp", raw
+        if lower.startswith(("http://", "https://")):
+            return raw, "network", raw
+        if lower.startswith("file://"):
+            path = Path(raw[7:]).expanduser()
+            return raw, "file", str(path.resolve(strict=False))
+        if lower.startswith("camera://"):
+            camera_ref = raw.split("://", 1)[1].strip()
+            if not camera_ref:
+                return None
+            return raw, "camera", int(camera_ref) if camera_ref.isdigit() else camera_ref
+        path = Path(raw).expanduser()
+        return raw, "file", str(path.resolve(strict=False))
+
+    def _open_capture(self, source_kind: str, capture_ref: str | int) -> cv2.VideoCapture | None:
+        if source_kind == "file":
+            target = Path(str(capture_ref))
+            if not target.exists():
+                return None
+            cap = cv2.VideoCapture(str(target))
+        else:
+            cap = cv2.VideoCapture(capture_ref)
         if not cap.isOpened():
             cap.release()
+            return None
+        return cap
+
+    def _get_capture(self, robot_id: str, source_url: str | None) -> tuple[str, cv2.VideoCapture] | None:
+        resolved = self._resolve_source(source_url)
+        if resolved is None:
+            return None
+        source_key, source_kind, capture_ref = resolved
+        with self._lock:
+            existing = self._captures.get(robot_id)
+            if existing and existing[0] == source_key and existing[1] == source_kind and existing[2].isOpened():
+                return source_kind, existing[2]
+        cap = self._open_capture(source_kind, capture_ref)
+        if cap is None:
             return None
         with self._lock:
             previous = self._captures.pop(robot_id, None)
             if previous:
-                previous[1].release()
-            self._captures[robot_id] = (source_url, cap)
-        return cap
+                previous[2].release()
+            self._captures[robot_id] = (source_key, source_kind, cap)
+        return source_kind, cap
+
+    def _read_frame(self, robot_id: str, source_kind: str, cap: cv2.VideoCapture, source_url: str | None) -> np.ndarray | None:
+        ok, frame = cap.read()
+        if ok and frame is not None:
+            return frame
+        if source_kind == "file":
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ok, frame = cap.read()
+            if ok and frame is not None:
+                return frame
+        if source_kind in {"rtsp", "network"}:
+            self._release_capture(robot_id)
+            reopened = self._get_capture(robot_id, source_url)
+            if reopened is None:
+                return None
+            _, retry_cap = reopened
+            ok, frame = retry_cap.read()
+            if ok and frame is not None:
+                return frame
+        return None
+
+    @staticmethod
+    def _source_label(source_kind: str) -> str:
+        if source_kind == "rtsp":
+            return "RTSP"
+        if source_kind == "network":
+            return "network"
+        if source_kind == "camera":
+            return "camera"
+        if source_kind == "file":
+            return "file"
+        return "video"
 
     def _synthetic_frame(self, robot_id: str, entry: dict[str, Any]) -> np.ndarray:
         h, w = 360, 640
@@ -152,30 +220,65 @@ class FrameProvider:
             cv2.putText(img, "CLEAR", (w - 160, 128), cv2.FONT_HERSHEY_SIMPLEX, 0.95, (255, 255, 255), 2)
         return img
 
+    @staticmethod
+    def _crop_resize(frame: np.ndarray, left: float, top: float, right: float, bottom: float) -> np.ndarray:
+        h, w = frame.shape[:2]
+        x0 = max(0, min(w - 1, int(left * w)))
+        x1 = max(x0 + 2, min(w, int(right * w)))
+        y0 = max(0, min(h - 1, int(top * h)))
+        y1 = max(y0 + 2, min(h, int(bottom * h)))
+        cropped = frame[y0:y1, x0:x1]
+        if cropped.size == 0:
+            return frame
+        return cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LINEAR)
+
+    def _apply_view_profile(self, frame: np.ndarray, view_profile: str | None) -> np.ndarray:
+        profile = str(view_profile or "").strip().lower()
+        if not profile or profile in {"none", "raw", "full"}:
+            return frame
+        if profile == "front_left":
+            return self._crop_resize(frame, 0.00, 0.08, 0.74, 0.96)
+        if profile == "front_center":
+            return self._crop_resize(frame, 0.13, 0.08, 0.87, 0.96)
+        if profile == "front_right":
+            return self._crop_resize(frame, 0.26, 0.08, 1.00, 0.96)
+        if profile == "side_left":
+            return self._crop_resize(frame, 0.00, 0.12, 0.58, 0.96)
+        if profile == "side_right":
+            return self._crop_resize(frame, 0.42, 0.12, 1.00, 0.96)
+        if profile == "zoom_center":
+            return self._crop_resize(frame, 0.22, 0.16, 0.78, 0.92)
+        return frame
+
     def get_frame(self, robot_id: str) -> tuple[np.ndarray, str, str]:
         entry = self.registry.get(robot_id)
         if entry is None:
             raise KeyError(robot_id)
-        source_url = str(entry.get("video_rtsp_url") or "")
-        cap = self._get_capture(robot_id, source_url)
+        source_url = str(entry.get("video_rtsp_url") or "").strip()
+        view_profile = str(entry.get("video_view_profile") or "").strip()
+        capture_info = self._get_capture(robot_id, source_url)
         note = ""
         status = "offline"
         frame = None
-        if cap is not None:
-            ok, frame = cap.read()
-            if ok and frame is not None:
+        if capture_info is not None:
+            source_kind, cap = capture_info
+            frame = self._read_frame(robot_id, source_kind, cap, source_url)
+            if frame is not None:
+                frame = self._apply_view_profile(frame, view_profile)
                 status = "online"
-                note = "RTSP ingested successfully"
+                if view_profile:
+                    note = f"{self._source_label(source_kind)} source ingested successfully ({view_profile})"
+                else:
+                    note = f"{self._source_label(source_kind)} source ingested successfully"
             else:
                 self._release_capture(robot_id)
-                frame = None
                 status = "degraded"
-                note = "RTSP source unavailable, fallback to synthetic proxy frame"
+                note = f"{self._source_label(source_kind)} source unavailable, fallback to synthetic proxy frame"
         if frame is None:
             frame = self._synthetic_frame(robot_id, entry)
             if source_url:
                 status = "degraded"
-                note = note or "Synthetic proxy frame generated while waiting for RTSP"
+                note = note or "Synthetic proxy frame generated while waiting for upstream video source"
             else:
                 status = "offline"
                 note = "No upstream RTSP yet, synthetic preview only"
@@ -202,7 +305,14 @@ def publish_service_heartbeat() -> None:
     mqtt_client.publish(f"{TOPIC_PREFIX}/heartbeat/video-worker", json.dumps(payload), qos=0)
 
 
-def publish_video_status(robot_id: str, status: str, note: str, frame: np.ndarray, source_url: str | None) -> None:
+def publish_video_status(
+    robot_id: str,
+    status: str,
+    note: str,
+    frame: np.ndarray,
+    source_url: str | None,
+    view_profile: str | None,
+) -> None:
     h, w = frame.shape[:2]
     snapshot_name = f"{robot_id}.jpg"
     snapshot_path = SNAPSHOT_DIR / snapshot_name
@@ -215,6 +325,7 @@ def publish_video_status(robot_id: str, status: str, note: str, frame: np.ndarra
         "source_url": source_url,
         "proxy_url": f"{VIDEO_PUBLIC_BASE}/streams/{robot_id}.mjpeg",
         "snapshot_url": f"{VIDEO_PUBLIC_BASE}/snapshots/{snapshot_name}",
+        "view_profile": view_profile,
         "status": status,
         "codec": "mjpeg",
         "fps": 6.0,
@@ -236,8 +347,10 @@ def publisher_loop() -> None:
                 frame, status, note = provider.get_frame(robot_id)
             except KeyError:
                 continue
-            source_url = (registry.get(robot_id) or {}).get("video_rtsp_url")
-            publish_video_status(robot_id, status, note, frame, source_url)
+            entry = registry.get(robot_id) or {}
+            source_url = entry.get("video_rtsp_url")
+            view_profile = entry.get("video_view_profile")
+            publish_video_status(robot_id, status, note, frame, source_url, view_profile)
 
 
 def on_connect(client: mqtt.Client, *_: Any) -> None:

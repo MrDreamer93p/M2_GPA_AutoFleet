@@ -100,6 +100,16 @@ pip install paho-mqtt
 python tools/robot_sim.py --host 127.0.0.1 --port 3889 --robots R1,R2,R3
 ```
 
+To drive the video wall with a real public sample video instead of synthetic fallback frames:
+
+```powershell
+python tools/fetch_demo_video.py
+python tools/robot_sim.py --host 127.0.0.1 --port 3889 --robots R1,R2,R3 --video-source-template file:///artifacts/demo/vtest.avi --video-view-mode convoy3
+```
+
+The bundled demo downloader pulls OpenCV's public `vtest.avi` sample into `data/artifacts/demo/`, which is already mounted into the `video-worker` container as `/artifacts/demo/`.
+When several robots share one video source, `--video-view-mode convoy3` applies three virtual camera crops: `front_left`, `front_center`, and `front_right`.
+
 ### 3. Open the dashboard
 
 - Frontend: `http://127.0.0.1:3000`

@@ -245,6 +245,7 @@ class RuntimeState:
                     "robot_id": robot_id,
                     "status": status.status if status else "offline",
                     "source_url": (status.source_url if status else None) or (telem.video_rtsp_url if telem else None),
+                    "view_profile": (status.view_profile if status else None) or (telem.video_view_profile if telem else None),
                     "proxy_url": status.proxy_url if status else None,
                     "snapshot_url": status.snapshot_url if status else None,
                     "fps": status.fps if status else None,
@@ -341,6 +342,7 @@ class RuntimeState:
                     "battery": telem.battery,
                     "mission_id": telem.mission_id,
                     "video_rtsp_url": telem.video_rtsp_url,
+                    "video_view_profile": telem.video_view_profile,
                     "pose": telem.pose.model_dump(),
                     "controls": raw.get("controls") or (telem.controls.model_dump() if telem.controls else None),
                     "motors": raw.get("motors") or (telem.motors.model_dump() if telem.motors else None),
@@ -362,4 +364,3 @@ class RuntimeState:
                 }
             )
         return out
-
