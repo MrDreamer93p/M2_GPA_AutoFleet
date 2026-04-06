@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import random
 import threading
 import time
@@ -21,6 +22,7 @@ class Robot:
     state: str = "IDLE"
     mission_id: str | None = None
     video_rtsp_url: str | None = None
+    video_view_profile: str | None = None
     linear_x: float = 0.0
     angular_z: float = 0.0
     latency_base_ms: float = 25.0
@@ -33,28 +35,56 @@ def now_ts() -> int:
 
 
 class Simulator:
-    def __init__(self, host: str, port: int, prefix: str, robot_ids: list[str]) -> None:
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        prefix: str,
+        robot_ids: list[str],
+        video_source_template: str,
+        video_view_mode: str,
+    ) -> None:
         self.host = host
         self.port = port
         self.prefix = prefix
+        self.video_source_template = video_source_template
+        self.video_view_mode = video_view_mode.strip().lower()
         self.robots = {
             rid: Robot(
                 robot_id=rid,
                 x=random.uniform(0.0, 2.0),
                 y=random.uniform(0.0, 2.0),
                 yaw=0.0,
-                video_rtsp_url=f"rtsp://{rid}.local/stream",
+                video_rtsp_url=self.build_video_source(rid),
+                video_view_profile=self.build_video_view_profile(idx, rid),
                 latency_base_ms=random.uniform(18.0, 36.0),
                 loss_base_pct=random.uniform(0.1, 1.2),
                 rssi_base_dbm=random.uniform(-68.0, -48.0),
             )
-            for rid in robot_ids
+            for idx, rid in enumerate(robot_ids)
         }
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
         self.running = True
         self.last_heartbeat_sent = {rid: 0 for rid in robot_ids}
+
+    def build_video_source(self, robot_id: str) -> str | None:
+        template = self.video_source_template.strip()
+        if not template:
+            return None
+        return template.format(robot_id=robot_id)
+
+    def build_video_view_profile(self, index: int, robot_id: str) -> str | None:
+        if self.video_view_mode in {"", "none", "off"}:
+            return None
+        if self.video_view_mode == "convoy3":
+            profiles = ("front_left", "front_center", "front_right")
+            return profiles[index % len(profiles)]
+        if self.video_view_mode == "surround3":
+            profiles = ("side_left", "front_center", "side_right")
+            return profiles[index % len(profiles)]
+        return self.video_view_mode
 
     def on_connect(self, client: mqtt.Client, *_):
         client.subscribe(f"{self.prefix}/cmd/+")
@@ -140,6 +170,7 @@ class Simulator:
                     "state": robot.state,
                     "mission_id": robot.mission_id,
                     "video_rtsp_url": robot.video_rtsp_url,
+                    "video_view_profile": robot.video_view_profile,
                     "controls": {"linear_x": round(robot.linear_x, 3), "angular_z": round(robot.angular_z, 3)},
                     "motors": {
                         "left_rpm": round(90.0 * robot.linear_x + 35.0 * robot.angular_z, 2),
@@ -167,6 +198,7 @@ class Simulator:
                             "battery": round(robot.battery, 3),
                             "state": robot.state,
                             "video_rtsp_url": robot.video_rtsp_url,
+                            "video_view_profile": robot.video_view_profile,
                         },
                     }
                     self.client.publish(f"{self.prefix}/heartbeat/{robot.robot_id}", json.dumps(heartbeat), qos=0)
@@ -195,11 +227,21 @@ def parse_args():
     parser.add_argument("--port", type=int, default=3889)
     parser.add_argument("--prefix", default="fleet/v1")
     parser.add_argument("--robots", default="R1,R2,R3")
+    parser.add_argument(
+        "--video-source-template",
+        default=os.getenv("AUTOFLEET_VIDEO_SOURCE_TEMPLATE", "rtsp://simulator/{robot_id}/stream"),
+        help="Template for the published video source. Supports {robot_id}. Examples: rtsp://cam/{robot_id}, file:///artifacts/demo/vtest.avi",
+    )
+    parser.add_argument(
+        "--video-view-mode",
+        default=os.getenv("AUTOFLEET_VIDEO_VIEW_MODE", "none"),
+        help="Virtual camera layout when multiple robots share one source. Use none, convoy3, surround3, or a concrete profile like front_left.",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
     robot_ids = [x.strip() for x in args.robots.split(",") if x.strip()]
-    sim = Simulator(args.host, args.port, args.prefix, robot_ids)
+    sim = Simulator(args.host, args.port, args.prefix, robot_ids, args.video_source_template, args.video_view_mode)
     sim.run()
