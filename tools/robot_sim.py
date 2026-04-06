@@ -241,7 +241,7 @@ def parse_args():
     parser.add_argument(
         "--video-source-template",
         default=os.getenv("AUTOFLEET_VIDEO_SOURCE_TEMPLATE", "rtsp://simulator/{robot_id}/stream"),
-        help="Template for the published video source. Supports {robot_id}. Examples: rtsp://cam/{robot_id}, file:///artifacts/demo/vtest.avi",
+        help="Template for the published video source. Supports {robot_id}. Examples: rtsp://cam/{robot_id}, file:///artifacts/demo/highway-forward.mp4",
     )
     parser.add_argument(
         "--video-view-mode",
