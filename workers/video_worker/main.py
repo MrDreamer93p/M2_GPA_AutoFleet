@@ -232,22 +232,37 @@ class FrameProvider:
             return frame
         return cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LINEAR)
 
+    @staticmethod
+    def _annotate_view(frame: np.ndarray, robot_id: str, view_profile: str | None) -> np.ndarray:
+        label = robot_id if not view_profile else f"{robot_id} | {view_profile}"
+        accent = (
+            ((abs(hash(robot_id)) >> 0) & 0x7F) + 96,
+            ((abs(hash(robot_id)) >> 7) & 0x7F) + 96,
+            ((abs(hash(robot_id)) >> 14) & 0x7F) + 96,
+        )
+        out = frame.copy()
+        h, w = out.shape[:2]
+        cv2.rectangle(out, (0, 0), (w - 1, h - 1), accent, 4)
+        cv2.rectangle(out, (12, 12), (12 + min(280, max(160, 13 * len(label))), 50), (12, 18, 24), -1)
+        cv2.putText(out, label, (22, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.72, accent, 2, cv2.LINE_AA)
+        return out
+
     def _apply_view_profile(self, frame: np.ndarray, view_profile: str | None) -> np.ndarray:
         profile = str(view_profile or "").strip().lower()
         if not profile or profile in {"none", "raw", "full"}:
             return frame
         if profile == "front_left":
-            return self._crop_resize(frame, 0.00, 0.08, 0.74, 0.96)
+            return self._crop_resize(frame, 0.00, 0.12, 0.58, 0.94)
         if profile == "front_center":
-            return self._crop_resize(frame, 0.13, 0.08, 0.87, 0.96)
+            return self._crop_resize(frame, 0.20, 0.12, 0.80, 0.94)
         if profile == "front_right":
-            return self._crop_resize(frame, 0.26, 0.08, 1.00, 0.96)
+            return self._crop_resize(frame, 0.42, 0.12, 1.00, 0.94)
         if profile == "side_left":
-            return self._crop_resize(frame, 0.00, 0.12, 0.58, 0.96)
+            return self._crop_resize(frame, 0.00, 0.16, 0.50, 0.94)
         if profile == "side_right":
-            return self._crop_resize(frame, 0.42, 0.12, 1.00, 0.96)
+            return self._crop_resize(frame, 0.50, 0.16, 1.00, 0.94)
         if profile == "zoom_center":
-            return self._crop_resize(frame, 0.22, 0.16, 0.78, 0.92)
+            return self._crop_resize(frame, 0.28, 0.20, 0.72, 0.90)
         return frame
 
     def get_frame(self, robot_id: str) -> tuple[np.ndarray, str, str]:
@@ -265,6 +280,7 @@ class FrameProvider:
             frame = self._read_frame(robot_id, source_kind, cap, source_url)
             if frame is not None:
                 frame = self._apply_view_profile(frame, view_profile)
+                frame = self._annotate_view(frame, robot_id, view_profile)
                 status = "online"
                 if view_profile:
                     note = f"{self._source_label(source_kind)} source ingested successfully ({view_profile})"

@@ -92,6 +92,27 @@ services:
       - mosquitto
       - video-worker
 
+  robot-sim:
+    image: python:3.11-slim
+    container_name: autofleet-robot-sim
+    restart: unless-stopped
+    working_dir: /tools
+    command: sh -c "pip install --no-cache-dir -r requirements.txt && python fetch_demo_video.py --output /artifacts/demo/vtest.avi && python robot_sim.py"
+    environment:
+      - AUTOFLEET_MQTT_HOST=mosquitto
+      - AUTOFLEET_MQTT_PORT=3889
+      - AUTOFLEET_TOPIC_PREFIX=fleet/v1
+      - AUTOFLEET_SIM_ROBOTS=${AUTOFLEET_SIM_ROBOTS:-R1,R2,R3}
+      - AUTOFLEET_VIDEO_SOURCE_TEMPLATE=${AUTOFLEET_SIM_VIDEO_SOURCE_TEMPLATE:-file:///artifacts/demo/vtest.avi}
+      - AUTOFLEET_VIDEO_VIEW_MODE=${AUTOFLEET_SIM_VIDEO_VIEW_MODE:-convoy3}
+      - AUTOFLEET_VIDEO_SOURCE_MAP=${AUTOFLEET_SIM_VIDEO_SOURCE_MAP:-}
+    volumes:
+      - ../tools:/tools:rw
+      - ../data/artifacts:/artifacts:rw
+      - ../data/logs:/logs:rw
+    depends_on:
+      - mosquitto
+
   frontend:
     image: python:3.11-slim
     container_name: autofleet-frontend

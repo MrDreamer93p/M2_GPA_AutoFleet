@@ -320,6 +320,7 @@ function renderVideoWall(items) {
           <div class="meta-item"><span class="meta-key">Latest ACK</span>${escapeHtml(ack.status ?? "-")}</div>
           <div class="meta-item"><span class="meta-key">Latency / Jitter</span>${escapeHtml(`${fmtNum(sample.latency_ms, 1)}ms / ${fmtNum(sample.jitter_ms, 1)}ms`)}</div>
           <div class="meta-item"><span class="meta-key">Throughput / RTT</span>${escapeHtml(`${fmtNum(sample.throughput_kbps, 0)}kbps / ${fmtNum(sample.control_rtt_ms, 1)}ms`)}</div>
+          <div class="meta-item"><span class="meta-key">View Profile</span>${escapeHtml(robot.video_status?.view_profile || robot.video_view_profile || "-")}</div>
           <div class="meta-item"><span class="meta-key">Perception</span>${escapeHtml(detections.length ? detections.map((d) => d.label).join(", ") : "no detection")}</div>
           <div class="meta-item"><span class="meta-key">Obstacles / Stream</span>${escapeHtml(`${robot.latest_perception?.obstacle_count ?? 0} / ${streamState}`)}</div>
         </div>

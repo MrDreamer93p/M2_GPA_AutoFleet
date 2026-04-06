@@ -8,6 +8,7 @@ import random
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import paho.mqtt.client as mqtt
 
@@ -43,12 +44,14 @@ class Simulator:
         robot_ids: list[str],
         video_source_template: str,
         video_view_mode: str,
+        video_source_map: dict[str, dict[str, str | None]],
     ) -> None:
         self.host = host
         self.port = port
         self.prefix = prefix
         self.video_source_template = video_source_template
         self.video_view_mode = video_view_mode.strip().lower()
+        self.video_source_map = video_source_map
         self.robots = {
             rid: Robot(
                 robot_id=rid,
@@ -70,12 +73,20 @@ class Simulator:
         self.last_heartbeat_sent = {rid: 0 for rid in robot_ids}
 
     def build_video_source(self, robot_id: str) -> str | None:
+        source_cfg = self.video_source_map.get(robot_id) or {}
+        mapped = str(source_cfg.get("source_url") or "").strip()
+        if mapped:
+            return mapped
         template = self.video_source_template.strip()
         if not template:
             return None
         return template.format(robot_id=robot_id)
 
     def build_video_view_profile(self, index: int, robot_id: str) -> str | None:
+        source_cfg = self.video_source_map.get(robot_id) or {}
+        mapped = str(source_cfg.get("video_view_profile") or "").strip()
+        if mapped:
+            return mapped
         if self.video_view_mode in {"", "none", "off"}:
             return None
         if self.video_view_mode == "convoy3":
@@ -223,10 +234,10 @@ class Simulator:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="AutoFleet robot simulator")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=3889)
+    parser.add_argument("--host", default=os.getenv("AUTOFLEET_MQTT_HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=int(os.getenv("AUTOFLEET_MQTT_PORT", "3889")))
     parser.add_argument("--prefix", default="fleet/v1")
-    parser.add_argument("--robots", default="R1,R2,R3")
+    parser.add_argument("--robots", default=os.getenv("AUTOFLEET_SIM_ROBOTS", "R1,R2,R3"))
     parser.add_argument(
         "--video-source-template",
         default=os.getenv("AUTOFLEET_VIDEO_SOURCE_TEMPLATE", "rtsp://simulator/{robot_id}/stream"),
@@ -237,11 +248,47 @@ def parse_args():
         default=os.getenv("AUTOFLEET_VIDEO_VIEW_MODE", "none"),
         help="Virtual camera layout when multiple robots share one source. Use none, convoy3, surround3, or a concrete profile like front_left.",
     )
+    parser.add_argument(
+        "--video-source-map",
+        default=os.getenv("AUTOFLEET_VIDEO_SOURCE_MAP", ""),
+        help="Path to a JSON file mapping robot IDs to source_url/video_view_profile. Overrides --video-source-template per robot.",
+    )
     return parser.parse_args()
+
+
+def load_video_source_map(path_value: str) -> dict[str, dict[str, str | None]]:
+    raw = path_value.strip()
+    if not raw:
+        return {}
+    path = Path(raw).expanduser().resolve()
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(payload, dict) and isinstance(payload.get("robots"), dict):
+        payload = payload["robots"]
+    if not isinstance(payload, dict):
+        raise ValueError("video source map must be a JSON object or contain a top-level 'robots' object")
+
+    result: dict[str, dict[str, str | None]] = {}
+    for robot_id, cfg in payload.items():
+        if not isinstance(cfg, dict):
+            continue
+        result[str(robot_id)] = {
+            "source_url": str(cfg.get("source_url") or "").strip() or None,
+            "video_view_profile": str(cfg.get("video_view_profile") or "").strip() or None,
+        }
+    return result
 
 
 if __name__ == "__main__":
     args = parse_args()
     robot_ids = [x.strip() for x in args.robots.split(",") if x.strip()]
-    sim = Simulator(args.host, args.port, args.prefix, robot_ids, args.video_source_template, args.video_view_mode)
+    video_source_map = load_video_source_map(args.video_source_map)
+    sim = Simulator(
+        args.host,
+        args.port,
+        args.prefix,
+        robot_ids,
+        args.video_source_template,
+        args.video_view_mode,
+        video_source_map,
+    )
     sim.run()

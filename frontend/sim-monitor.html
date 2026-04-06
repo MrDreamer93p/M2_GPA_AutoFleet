@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoFleet Simulator Monitor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./sim-monitor.css">
+</head>
+<body class="theme-neo">
+  <main class="sim-shell">
+    <header class="topbar">
+      <div>
+        <h1>Simulator Monitor</h1>
+        <p class="hint">Realtime view of what `robot-sim` is publishing into the AutoFleet stack</p>
+      </div>
+      <div class="top-actions">
+        <a class="btn subtle monitor-link" href="./index.html">Open Main Control</a>
+        <button id="refreshBtn" class="btn">Refresh Now</button>
+        <label class="inline">
+          <input type="checkbox" id="autoRefreshToggle" checked>
+          Auto refresh (1s)
+        </label>
+      </div>
+    </header>
+
+    <section class="panel api-panel elevated">
+      <div class="api-config">
+        <label for="apiBase">API Endpoint</label>
+        <input id="apiBase" placeholder="http://127.0.0.1:8200/api/v1">
+        <button id="applyApiBaseBtn" class="btn subtle">Apply Endpoint</button>
+      </div>
+      <p class="hint small">This page shows simulator telemetry, published video stream metadata, and recent backend events.</p>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>Sim Summary</h2>
+        <span class="badge">Live</span>
+      </div>
+      <div id="summaryGrid" class="summary-grid"></div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>Published Streams</h2>
+        <span class="badge">video_status + telemetry</span>
+      </div>
+      <div id="streamGrid" class="sim-card-grid"></div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>Telemetry JSON</h2>
+        <span class="badge">/robots</span>
+      </div>
+      <pre id="robotsJson"></pre>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>Video Streams JSON</h2>
+        <span class="badge">/video/streams</span>
+      </div>
+      <pre id="streamsJson"></pre>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>Recent Events</h2>
+        <span class="badge">/events</span>
+      </div>
+      <pre id="eventsJson"></pre>
+    </section>
+  </main>
+  <script src="./sim-monitor.js"></script>
+</body>
+</html>

@@ -74,6 +74,7 @@ Defined in [`infra/compose.yml`](./infra/compose.yml):
 - `backend`
 - `video-worker`
 - `perception-worker`
+- `robot-sim`
 - `frontend`
 
 ## Quick Start
@@ -96,8 +97,15 @@ Why `8200`? On some Windows machines, port `8000` is reserved by the OS. The com
 From the repository root:
 
 ```powershell
-pip install paho-mqtt
+pip install -r tools/requirements.txt
 python tools/robot_sim.py --host 127.0.0.1 --port 3889 --robots R1,R2,R3
+```
+
+The Docker stack can also keep the simulator alive for you:
+
+```powershell
+cd infra
+docker compose up -d robot-sim
 ```
 
 To drive the video wall with a real public sample video instead of synthetic fallback frames:
@@ -110,9 +118,19 @@ python tools/robot_sim.py --host 127.0.0.1 --port 3889 --robots R1,R2,R3 --video
 The bundled demo downloader pulls OpenCV's public `vtest.avi` sample into `data/artifacts/demo/`, which is already mounted into the `video-worker` container as `/artifacts/demo/`.
 When several robots share one video source, `--video-view-mode convoy3` applies three virtual camera crops: `front_left`, `front_center`, and `front_right`.
 
+To drive the wall from a real multiview dataset sequence such as A2D2 or PandaSet:
+
+```powershell
+python tools/prepare_multiview_dataset.py --dataset a2d2 --dataset-root D:\datasets\A2D2 --sequence 20180810_150607
+python tools/robot_sim.py --host 127.0.0.1 --port 3889 --robots R1,R2,R3 --video-source-map data\artifacts\datasets\current\multiview_manifest.json
+```
+
+The preparation tool exports `R1.avi`, `R2.avi`, `R3.avi` plus `multiview_manifest.json` under `data/artifacts/datasets/current/`. The manifest already contains `source_url` values pointing at `/artifacts/...`, so the existing `video-worker` can consume it without extra changes.
+
 ### 3. Open the dashboard
 
 - Frontend: `http://127.0.0.1:3000`
+- Simulator monitor: `http://127.0.0.1:3000/sim-monitor.html`
 - Backend health: `http://127.0.0.1:8200/api/v1/health`
 - Video worker health: `http://127.0.0.1:8400/health`
 
