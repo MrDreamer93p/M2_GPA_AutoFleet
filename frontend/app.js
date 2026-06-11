@@ -1,13 +1,16 @@
 const defaultHost = window.location.hostname || "127.0.0.1";
 const defaultProto = window.location.protocol === "https:" ? "https:" : "http:";
 const defaultApiBases = [
-  `${defaultProto}//${defaultHost}:8000/api/v1`,
+  `${defaultProto}//${defaultHost}:8201/api/v1`,
   `${defaultProto}//${defaultHost}:8200/api/v1`,
+  `${defaultProto}//${defaultHost}:8000/api/v1`,
   `${defaultProto}//${defaultHost}:8001/api/v1`,
 ];
+const transientApiBases = [];
 const savedApiBase = (localStorage.getItem("autofleet_api_base") || "").replace(/\/+$/, "");
-const hasPinnedApiBase = Boolean(savedApiBase) && !defaultApiBases.includes(savedApiBase);
-let apiBase = savedApiBase || defaultApiBases[0];
+const hasPinnedApiBase =
+  Boolean(savedApiBase) && !defaultApiBases.includes(savedApiBase) && !transientApiBases.includes(savedApiBase);
+let apiBase = hasPinnedApiBase ? savedApiBase : defaultApiBases[0];
 
 const output = document.getElementById("output");
 const robotTable = document.getElementById("robotTable");
@@ -27,6 +30,9 @@ const networkChart = document.getElementById("networkChart");
 const networkLegend = document.getElementById("networkLegend");
 const networkSummary = document.getElementById("networkSummary");
 const networkMetricSelect = document.getElementById("networkMetricSelect");
+const videoQualitySelect = document.getElementById("videoQualitySelect");
+const applyVideoQualityBtn = document.getElementById("applyVideoQualityBtn");
+const videoQualityStatus = document.getElementById("videoQualityStatus");
 const MAX_NETWORK_POINTS = 120;
 const MAX_DIAG_POINTS = 240;
 
@@ -65,11 +71,13 @@ let lastDiagSnapshot = null;
 let diagTimer = null;
 let diagTickInFlight = false;
 let stressTimer = null;
+let videoWallRenderKey = "";
+let videoSettingsCache = null;
 const stressState = {
   running: false,
   startedAt: 0,
   stopAt: 0,
-  simulated_capacity_mbps: 0,
+  simulated_capacity_mb_s: 0,
   vehicle_count: 3,
   samples: [],
   lastError: null,
@@ -132,9 +140,21 @@ function computeJitter(values) {
   return average(diffs);
 }
 
-function bytesToKbps(bytes, durationMs) {
+function bytesToKbS(bytes, durationMs) {
   if (!Number.isFinite(bytes) || !Number.isFinite(durationMs) || durationMs <= 0) return Number.NaN;
-  return (bytes * 8) / (durationMs / 1000) / 1000;
+  return bytes / (durationMs / 1000) / 1024;
+}
+
+function kbpsToKbS(kbps) {
+  const n = Number(kbps);
+  return Number.isFinite(n) ? n / 8.192 : Number.NaN;
+}
+
+function formatRateKbS(value, digits = 1) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "-";
+  if (Math.abs(n) >= 1024) return `${(n / 1024).toFixed(digits)} MB/s`;
+  return `${n.toFixed(digits)} KB/s`;
 }
 
 function clamp(value, min, max) {
@@ -207,6 +227,42 @@ async function api(path, options = {}) {
   return body;
 }
 
+function renderVideoSettings(settings) {
+  videoSettingsCache = settings;
+  const current = settings?.current || {};
+  if (videoQualitySelect && current.preset) {
+    videoQualitySelect.value = current.preset;
+  }
+  if (videoQualityStatus) {
+    const width = current.max_width || "-";
+    const q = current.jpeg_quality || "-";
+    const interval = current.mjpeg_interval_ms || "-";
+    videoQualityStatus.textContent = `Video ${current.preset || "balanced"} | ${width}px | Q${q} | ${interval}ms`;
+  }
+}
+
+async function loadVideoSettings() {
+  if (!videoQualitySelect) return;
+  try {
+    const settings = await api("/video/settings");
+    renderVideoSettings(settings);
+  } catch (err) {
+    if (videoQualityStatus) videoQualityStatus.textContent = `Video settings unavailable`;
+  }
+}
+
+async function applyVideoQuality() {
+  const preset = videoQualitySelect?.value || "balanced";
+  if (videoQualityStatus) videoQualityStatus.textContent = `Applying ${preset}...`;
+  const settings = await api("/video/settings", {
+    method: "POST",
+    body: JSON.stringify({ preset }),
+  });
+  renderVideoSettings(settings);
+  videoWallRenderKey = "";
+  await refreshAll({ quiet: true });
+}
+
 async function timedGet(path) {
   const started = performance.now();
   const res = await fetchWithApiFallback(path, {
@@ -232,7 +288,7 @@ async function timedGet(path) {
     path,
     latency_ms: ended - started,
     bytes,
-    throughput_kbps: bytesToKbps(bytes, ended - started),
+    throughput_kb_s: bytesToKbS(bytes, ended - started),
     body,
   };
 }
@@ -251,7 +307,7 @@ function getLatestSample(robotId) {
 
 function getMaxThroughput(robotId) {
   const series = networkHistory.get(robotId) || [];
-  const values = finiteValues(series.map((x) => x.throughput_kbps));
+  const values = finiteValues(series.map((x) => x.throughput_kb_s));
   if (!values.length) return Number.NaN;
   return Math.max(...values);
 }
@@ -269,7 +325,7 @@ function renderRobotTable(items) {
       <td>${escapeHtml(robot.last_seen_age_s ?? "-")}</td>
       <td>${escapeHtml(fmtNum(sample?.latency_ms, 1))}ms</td>
       <td>${escapeHtml(fmtNum(sample?.jitter_ms, 1))}ms</td>
-      <td>${escapeHtml(fmtNum(sample?.throughput_kbps, 0))}kbps</td>
+      <td>${escapeHtml(formatRateKbS(sample?.throughput_kb_s))}</td>
       <td>${escapeHtml(fmtNum(sample?.control_rtt_ms, 1))}ms</td>
       <td>${escapeHtml(robot.video_status?.proxy_url || robot.video_rtsp_url || "-")}</td>
     `;
@@ -279,9 +335,27 @@ function renderRobotTable(items) {
 
 function renderVideoWall(items) {
   if (!items.length) {
+    videoWallRenderKey = "";
     videoWall.innerHTML = `<div class="video-empty">No connected robots yet. Publish telemetry to see streams.</div>`;
     return;
   }
+
+  const nextRenderKey = items
+    .map((robot) =>
+      [
+        robot.robot_id,
+        robot.state,
+        robot.video_status?.status || "offline",
+        robot.video_status?.proxy_url || "",
+        robot.video_status?.snapshot_url || "",
+        robot.video_rtsp_url || "",
+      ].join("|")
+    )
+    .join(";");
+  if (nextRenderKey === videoWallRenderKey && videoWall.querySelector(".mjpeg-stream, .snapshot-thumb, .video-card")) {
+    return;
+  }
+  videoWallRenderKey = nextRenderKey;
 
   videoWall.innerHTML = items
     .map((robot) => {
@@ -292,6 +366,7 @@ function renderVideoWall(items) {
       const sample = getLatestSample(robot.robot_id) || {};
       const streamHtml = buildStreamView(robot);
       const detections = robot.latest_perception?.detections || [];
+      const sensorSummary = formatSensorSummary(robot.sensor_summary);
       const risk = highestRobotRisk(robot);
       const streamState = robot.video_status?.status || "offline";
       const flags = [
@@ -319,15 +394,25 @@ function renderVideoWall(items) {
           <div class="meta-item"><span class="meta-key">Output(L,R RPM)</span>${escapeHtml(`${fmtNum(motors.left_rpm, 1)}, ${fmtNum(motors.right_rpm, 1)}`)}</div>
           <div class="meta-item"><span class="meta-key">Latest ACK</span>${escapeHtml(ack.status ?? "-")}</div>
           <div class="meta-item"><span class="meta-key">Latency / Jitter</span>${escapeHtml(`${fmtNum(sample.latency_ms, 1)}ms / ${fmtNum(sample.jitter_ms, 1)}ms`)}</div>
-          <div class="meta-item"><span class="meta-key">Throughput / RTT</span>${escapeHtml(`${fmtNum(sample.throughput_kbps, 0)}kbps / ${fmtNum(sample.control_rtt_ms, 1)}ms`)}</div>
+          <div class="meta-item"><span class="meta-key">Throughput / RTT</span>${escapeHtml(`${formatRateKbS(sample.throughput_kb_s)} / ${fmtNum(sample.control_rtt_ms, 1)}ms`)}</div>
           <div class="meta-item"><span class="meta-key">View Profile</span>${escapeHtml(robot.video_status?.view_profile || robot.video_view_profile || "-")}</div>
           <div class="meta-item"><span class="meta-key">Perception</span>${escapeHtml(detections.length ? detections.map((d) => d.label).join(", ") : "no detection")}</div>
+          <div class="meta-item"><span class="meta-key">Sensors</span>${escapeHtml(sensorSummary)}</div>
           <div class="meta-item"><span class="meta-key">Obstacles / Stream</span>${escapeHtml(`${robot.latest_perception?.obstacle_count ?? 0} / ${streamState}`)}</div>
         </div>
         <div class="video-flags">${flags}</div>
       </article>`;
     })
     .join("");
+}
+
+function formatSensorSummary(summary) {
+  if (!summary) return "not reported";
+  const sensors = Array.isArray(summary.sensors) ? summary.sensors : [];
+  const online = sensors.filter((sensor) => sensor.status === "online").length;
+  const types = [...new Set(sensors.map((sensor) => sensor.sensor_type || sensor.sensor_id).filter(Boolean))].slice(0, 4);
+  const label = types.length ? types.join(", ") : `${online}/${sensors.length || 0} online`;
+  return `${summary.fusion_status || "offline"}: ${label}`;
 }
 
 function buildStreamView(robot) {
@@ -373,7 +458,9 @@ function updateNetworkHistory(items) {
     const prev = series.length ? series[series.length - 1] : null;
 
     const latency = finiteOrNaN(robot.network?.latency_ms);
-    const throughput = finiteOrNaN(robot.network?.throughput_kbps);
+    const throughput = Number.isFinite(Number(robot.network?.throughput_kb_s))
+      ? finiteOrNaN(robot.network?.throughput_kb_s)
+      : kbpsToKbS(robot.network?.throughput_kbps);
     const packetLoss = finiteOrNaN(robot.network?.packet_loss_pct);
     const rssi = finiteOrNaN(robot.network?.rssi_dbm);
     const controlRtt = finiteOrNaN(robot.control_rtt_ms);
@@ -386,7 +473,7 @@ function updateNetworkHistory(items) {
       t: now,
       latency_ms: latency,
       jitter_ms: jitter,
-      throughput_kbps: throughput,
+      throughput_kb_s: throughput,
       packet_loss_pct: packetLoss,
       rssi_dbm: rssi,
       control_rtt_ms: controlRtt,
@@ -411,7 +498,7 @@ function updateNetworkHistory(items) {
 }
 
 function metricConfig(metric) {
-  if (metric === "throughput_kbps") return { label: "Throughput", unit: "kbps", minMax: 300 };
+  if (metric === "throughput_kb_s") return { label: "Throughput", unit: "KB/s", minMax: 40 };
   if (metric === "packet_loss_pct") return { label: "Packet Loss", unit: "%", minMax: 5 };
   if (metric === "jitter_ms") return { label: "Jitter", unit: "ms", minMax: 20 };
   if (metric === "control_rtt_ms") return { label: "Control RTT", unit: "ms", minMax: 40 };
@@ -511,7 +598,7 @@ function renderNetworkSummary(items) {
   const avgJitter = average(latestSamples.map((s) => s.jitter_ms));
   const avgLoss = average(latestSamples.map((s) => s.packet_loss_pct));
   const avgRtt = average(latestSamples.map((s) => s.control_rtt_ms));
-  const totalThroughput = finiteValues(latestSamples.map((s) => s.throughput_kbps)).reduce((a, b) => a + b, 0);
+  const totalThroughput = finiteValues(latestSamples.map((s) => s.throughput_kb_s)).reduce((a, b) => a + b, 0);
   const peakThroughput = Math.max(
     0,
     ...Array.from(networkHistory.keys()).map((robotId) => getMaxThroughput(robotId)).filter((v) => Number.isFinite(v))
@@ -523,8 +610,8 @@ function renderNetworkSummary(items) {
     <div class="summary-card"><span>Avg Latency</span><strong>${escapeHtml(fmtNum(avgLatency, 1))} ms</strong></div>
     <div class="summary-card"><span>Avg Jitter</span><strong>${escapeHtml(fmtNum(avgJitter, 1))} ms</strong></div>
     <div class="summary-card"><span>Avg Packet Loss</span><strong>${escapeHtml(fmtNum(avgLoss, 2))} %</strong></div>
-    <div class="summary-card"><span>Total Throughput</span><strong>${escapeHtml(fmtNum(totalThroughput, 0))} kbps</strong></div>
-    <div class="summary-card"><span>Peak Throughput</span><strong>${escapeHtml(fmtNum(peakThroughput, 0))} kbps</strong></div>
+    <div class="summary-card"><span>Total Throughput</span><strong>${escapeHtml(formatRateKbS(totalThroughput))}</strong></div>
+    <div class="summary-card"><span>Peak Throughput</span><strong>${escapeHtml(formatRateKbS(peakThroughput))}</strong></div>
     <div class="summary-card"><span>Avg Control RTT</span><strong>${escapeHtml(fmtNum(avgRtt, 1))} ms</strong></div>
   `;
 }
@@ -545,8 +632,8 @@ function renderNetworkLegend(items) {
           <strong>${escapeHtml(robot.robot_id)}</strong>
           <span>lat ${escapeHtml(fmtNum(sample.latency_ms, 1))}ms</span>
           <span>jit ${escapeHtml(fmtNum(sample.jitter_ms, 1))}ms</span>
-          <span>thr ${escapeHtml(fmtNum(sample.throughput_kbps, 0))}kbps</span>
-          <span>max ${escapeHtml(fmtNum(maxThr, 0))}kbps</span>
+          <span>thr ${escapeHtml(formatRateKbS(sample.throughput_kb_s))}</span>
+          <span>max ${escapeHtml(formatRateKbS(maxThr))}</span>
           <span>loss ${escapeHtml(fmtNum(sample.packet_loss_pct, 1))}%</span>
           <span>rtt ${escapeHtml(fmtNum(sample.control_rtt_ms, 1))}ms</span>
         </div>`;
@@ -783,13 +870,13 @@ function drawDiagChart() {
 
   const videoSamples = stressState.samples || [];
   const hasVideoData = videoSamples.length >= 2;
-  const seriesA = hasVideoData ? videoSamples.map((x) => x.offered_mbps) : diagHistory.map((x) => x.latency_ms);
-  const seriesB = hasVideoData ? videoSamples.map((x) => x.delivered_mbps) : [];
+  const seriesA = hasVideoData ? videoSamples.map((x) => x.offered_mb_s) : diagHistory.map((x) => x.latency_ms);
+  const seriesB = hasVideoData ? videoSamples.map((x) => x.delivered_mb_s) : [];
   const values = finiteValues([...seriesA, ...seriesB]);
   const maxY = values.length
-    ? Math.max(hasVideoData ? 10 : 80, ...values, hasVideoData ? stressState.simulated_capacity_mbps : 0)
+    ? Math.max(hasVideoData ? 1.25 : 80, ...values, hasVideoData ? stressState.simulated_capacity_mb_s : 0)
     : hasVideoData
-      ? 10
+      ? 1.25
       : 80;
   const minY = 0;
 
@@ -820,7 +907,7 @@ function drawDiagChart() {
 
   const yToPx = (v) => padding.top + ((maxY - v) / (maxY - minY || 1)) * plotH;
   const pointsA = hasVideoData
-    ? videoSamples.filter((x) => Number.isFinite(x.offered_mbps))
+    ? videoSamples.filter((x) => Number.isFinite(x.offered_mb_s))
     : diagHistory.filter((x) => Number.isFinite(x.latency_ms));
   if (pointsA.length >= 2) {
     ctx.strokeStyle = line;
@@ -828,7 +915,7 @@ function drawDiagChart() {
     ctx.beginPath();
     for (let i = 0; i < pointsA.length; i += 1) {
       const x = padding.left + (plotW * i) / (MAX_DIAG_POINTS - 1);
-      const y = yToPx(hasVideoData ? pointsA[i].offered_mbps : pointsA[i].latency_ms);
+      const y = yToPx(hasVideoData ? pointsA[i].offered_mb_s : pointsA[i].latency_ms);
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
@@ -836,25 +923,25 @@ function drawDiagChart() {
   }
 
   if (hasVideoData) {
-    const pointsB = videoSamples.filter((x) => Number.isFinite(x.delivered_mbps));
+    const pointsB = videoSamples.filter((x) => Number.isFinite(x.delivered_mb_s));
     if (pointsB.length >= 2) {
       ctx.strokeStyle = "#00d6ff";
       ctx.lineWidth = 2.3;
       ctx.beginPath();
       for (let i = 0; i < pointsB.length; i += 1) {
         const x = padding.left + (plotW * i) / (MAX_DIAG_POINTS - 1);
-        const y = yToPx(pointsB[i].delivered_mbps);
+        const y = yToPx(pointsB[i].delivered_mb_s);
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       }
       ctx.stroke();
     }
 
-    if (Number.isFinite(stressState.simulated_capacity_mbps) && stressState.simulated_capacity_mbps > 0) {
+    if (Number.isFinite(stressState.simulated_capacity_mb_s) && stressState.simulated_capacity_mb_s > 0) {
       ctx.strokeStyle = "#f8ff57";
       ctx.setLineDash([6, 4]);
       ctx.lineWidth = 1.4;
-      const y = yToPx(stressState.simulated_capacity_mbps);
+      const y = yToPx(stressState.simulated_capacity_mb_s);
       ctx.beginPath();
       ctx.moveTo(padding.left, y);
       ctx.lineTo(padding.left + plotW, y);
@@ -866,9 +953,9 @@ function drawDiagChart() {
   ctx.fillStyle = label;
   ctx.font = "12px IBM Plex Mono, monospace";
   if (hasVideoData) {
-    ctx.fillText("Video stress throughput (Mbps)", padding.left + 4, 12);
-    ctx.fillText(`${Math.round(maxY)}Mbps`, 2, padding.top + 10);
-    ctx.fillText("0Mbps", 8, padding.top + plotH);
+    ctx.fillText("Video stress throughput (MB/s)", padding.left + 4, 12);
+    ctx.fillText(`${fmtNum(maxY, 1)}MB/s`, 2, padding.top + 10);
+    ctx.fillText("0MB/s", 8, padding.top + plotH);
     ctx.fillText(`-${Math.round(MAX_DIAG_POINTS / 4)}s`, padding.left + 2, height - 6);
     ctx.fillText("now", width - 28, height - 6);
     ctx.fillText("Pink=Offered  Cyan=Delivered  Yellow=Link cap", padding.left + 4, height - 6);
@@ -890,18 +977,18 @@ function stressSummary(nowMs = Date.now()) {
   const end = stressState.running ? nowMs : stressState.stopAt;
   const durationMs = Math.max(1, end - stressState.startedAt);
   const samples = stressState.samples || [];
-  const delivered = finiteValues(samples.map((x) => x.delivered_mbps));
+  const delivered = finiteValues(samples.map((x) => x.delivered_mb_s));
   const loss = finiteValues(samples.map((x) => x.loss_pct));
   const jitter = finiteValues(samples.map((x) => x.jitter_ms));
   const stableSamples = samples.filter((x) => x.loss_pct <= 2 && x.jitter_ms <= 20);
-  const stableDelivered = finiteValues(stableSamples.map((x) => x.delivered_mbps));
-  const totalLimitMbps = stableDelivered.length ? percentile(stableDelivered, 0.95) : percentile(delivered, 0.5);
+  const stableDelivered = finiteValues(stableSamples.map((x) => x.delivered_mb_s));
+  const totalLimitMbS = stableDelivered.length ? percentile(stableDelivered, 0.95) : percentile(delivered, 0.5);
   const vehicleCount = Math.max(1, stressState.vehicle_count || 1);
-  const singleLimitMbps = Number.isFinite(totalLimitMbps) ? totalLimitMbps / vehicleCount : Number.NaN;
+  const singleLimitMbS = Number.isFinite(totalLimitMbS) ? totalLimitMbS / vehicleCount : Number.NaN;
   const avgLoss = average(loss);
   const p95Jitter = percentile(jitter, 0.95);
-  const maxDeliveredMbps = delivered.length ? Math.max(...delivered) : Number.NaN;
-  const currentDeliveredMbps = delivered.length ? delivered[delivered.length - 1] : Number.NaN;
+  const maxDeliveredMbS = delivered.length ? Math.max(...delivered) : Number.NaN;
+  const currentDeliveredMbS = delivered.length ? delivered[delivered.length - 1] : Number.NaN;
   const stablePct = samples.length ? (stableSamples.length * 100) / samples.length : Number.NaN;
   const isStable = Number.isFinite(avgLoss) && Number.isFinite(p95Jitter) && avgLoss <= 2 && p95Jitter <= 20 && stablePct >= 80;
   return {
@@ -909,13 +996,13 @@ function stressSummary(nowMs = Date.now()) {
     duration_s: durationMs / 1000,
     vehicle_count: vehicleCount,
     sample_count: samples.length,
-    simulated_capacity_mbps: stressState.simulated_capacity_mbps,
-    total_bw_limit_mbps: totalLimitMbps,
-    per_stream_limit_mbps: singleLimitMbps,
+    simulated_capacity_mb_s: stressState.simulated_capacity_mb_s,
+    total_bw_limit_mb_s: totalLimitMbS,
+    per_stream_limit_mb_s: singleLimitMbS,
     avg_packet_loss_pct: avgLoss,
     p95_jitter_ms: p95Jitter,
-    max_delivered_mbps: maxDeliveredMbps,
-    current_delivered_mbps: currentDeliveredMbps,
+    max_delivered_mb_s: maxDeliveredMbS,
+    current_delivered_mb_s: currentDeliveredMbS,
     stable_sample_pct: stablePct,
     stable: isStable,
     last_error: stressState.lastError,
@@ -931,8 +1018,8 @@ function renderDiagnostics(snapshot) {
   const avgTelemetryLatency = average(latestSamples.map((s) => s.latency_ms));
   const avgTelemetryJitter = average(latestSamples.map((s) => s.jitter_ms));
   const avgControlRtt = average(latestSamples.map((s) => s.control_rtt_ms));
-  const totalTelemetryKbps = finiteValues(latestSamples.map((s) => s.throughput_kbps)).reduce((a, b) => a + b, 0);
-  const peakTelemetryKbps = Math.max(
+  const totalTelemetryKbS = finiteValues(latestSamples.map((s) => s.throughput_kb_s)).reduce((a, b) => a + b, 0);
+  const peakTelemetryKbS = Math.max(
     0,
     ...items.map((r) => getMaxThroughput(r.robot_id)).filter((x) => Number.isFinite(x))
   );
@@ -946,20 +1033,20 @@ function renderDiagnostics(snapshot) {
     <div class="summary-card"><span>Avg Device Latency</span><strong>${escapeHtml(fmtNum(avgTelemetryLatency, 1))} ms</strong></div>
     <div class="summary-card"><span>Avg Device Jitter</span><strong>${escapeHtml(fmtNum(avgTelemetryJitter, 1))} ms</strong></div>
     <div class="summary-card"><span>Avg Control RTT</span><strong>${escapeHtml(fmtNum(avgControlRtt, 1))} ms</strong></div>
-    <div class="summary-card"><span>Video Total Limit</span><strong>${escapeHtml(fmtNum(stress.total_bw_limit_mbps, 2))} Mbps</strong></div>
-    <div class="summary-card"><span>Video Per-stream Limit</span><strong>${escapeHtml(fmtNum(stress.per_stream_limit_mbps, 2))} Mbps</strong></div>
+    <div class="summary-card"><span>Video Total Limit</span><strong>${escapeHtml(formatRateKbS(stress.total_bw_limit_mb_s * 1024))}</strong></div>
+    <div class="summary-card"><span>Video Per-stream Limit</span><strong>${escapeHtml(formatRateKbS(stress.per_stream_limit_mb_s * 1024))}</strong></div>
     <div class="summary-card"><span>Sim Avg Packet Loss</span><strong>${escapeHtml(fmtNum(stress.avg_packet_loss_pct, 2))} %</strong></div>
     <div class="summary-card"><span>Sim P95 Jitter</span><strong>${escapeHtml(fmtNum(stress.p95_jitter_ms, 1))} ms</strong></div>
   `;
 
   diagProtocolCards.innerHTML = `
-    <div class="summary-card"><span>HTTP Pull Throughput</span><strong>${escapeHtml(fmtNum(snapshot.http_kbps, 1))} kbps</strong></div>
-    <div class="summary-card"><span>MQTT Telemetry Total</span><strong>${escapeHtml(fmtNum(totalTelemetryKbps, 0))} kbps</strong></div>
-    <div class="summary-card"><span>MQTT Telemetry Peak</span><strong>${escapeHtml(fmtNum(peakTelemetryKbps, 0))} kbps</strong></div>
+    <div class="summary-card"><span>HTTP Pull Throughput</span><strong>${escapeHtml(formatRateKbS(snapshot.http_kb_s))}</strong></div>
+    <div class="summary-card"><span>MQTT Telemetry Total</span><strong>${escapeHtml(formatRateKbS(totalTelemetryKbS))}</strong></div>
+    <div class="summary-card"><span>MQTT Telemetry Peak</span><strong>${escapeHtml(formatRateKbS(peakTelemetryKbS))}</strong></div>
     <div class="summary-card"><span>RTSP Streams Online</span><strong>${escapeHtml(streamCount)}</strong></div>
     <div class="summary-card"><span>Sim Vehicles</span><strong>${escapeHtml(stress.vehicle_count)}</strong></div>
-    <div class="summary-card"><span>Sim Link Capacity</span><strong>${escapeHtml(fmtNum(stress.simulated_capacity_mbps, 2))} Mbps</strong></div>
-    <div class="summary-card"><span>Sim Max Delivered</span><strong>${escapeHtml(fmtNum(stress.max_delivered_mbps, 2))} Mbps</strong></div>
+    <div class="summary-card"><span>Sim Link Capacity</span><strong>${escapeHtml(formatRateKbS(stress.simulated_capacity_mb_s * 1024))}</strong></div>
+    <div class="summary-card"><span>Sim Max Delivered</span><strong>${escapeHtml(formatRateKbS(stress.max_delivered_mb_s * 1024))}</strong></div>
     <div class="summary-card"><span>Stability</span><strong>${stress.stable ? "Stable" : "Unstable"}</strong></div>
   `;
 
@@ -972,7 +1059,7 @@ function renderDiagnostics(snapshot) {
         <td class="${robot.online ? "online" : "offline"}">${escapeHtml(robot.online)}</td>
         <td>${escapeHtml(fmtNum(sample.latency_ms, 1))}ms</td>
         <td>${escapeHtml(fmtNum(sample.jitter_ms, 1))}ms</td>
-        <td>${escapeHtml(fmtNum(sample.throughput_kbps, 0))}kbps</td>
+        <td>${escapeHtml(formatRateKbS(sample.throughput_kb_s))}</td>
         <td>${escapeHtml(fmtNum(sample.control_rtt_ms, 1))}ms</td>
         <td>${escapeHtml(fmtNum(sample.packet_loss_pct, 2))}%</td>
       </tr>`;
@@ -999,7 +1086,7 @@ async function refreshDiagnosticsSnapshot({ quiet = false } = {}) {
     health_latency_ms: health.latency_ms,
     robots_latency_ms: robots.latency_ms,
     api_pull_jitter_ms: computeJitter(pullLatency),
-    http_kbps: bytesToKbps(health.bytes + robots.bytes, health.latency_ms + robots.latency_ms),
+    http_kb_s: bytesToKbS(health.bytes + robots.bytes, health.latency_ms + robots.latency_ms),
     items,
   };
   lastDiagSnapshot = snapshot;
@@ -1015,7 +1102,7 @@ function clearStressState() {
   stressState.running = false;
   stressState.startedAt = 0;
   stressState.stopAt = 0;
-  stressState.simulated_capacity_mbps = 0;
+  stressState.simulated_capacity_mb_s = 0;
   stressState.vehicle_count = getVideoVehicleCount();
   stressState.samples = [];
   stressState.lastError = null;
@@ -1033,11 +1120,11 @@ function stopStressTest({ byTimeout = false } = {}) {
   const s = stressSummary();
   if (byTimeout) {
     setDiagStatus(
-      `Video stress done: total limit ${fmtNum(s.total_bw_limit_mbps, 2)} Mbps, per stream ${fmtNum(s.per_stream_limit_mbps, 2)} Mbps, ${s.stable ? "stable" : "unstable"}`
+      `Video stress done: total limit ${formatRateKbS(s.total_bw_limit_mb_s * 1024)}, per stream ${formatRateKbS(s.per_stream_limit_mb_s * 1024)}, ${s.stable ? "stable" : "unstable"}`
     );
   } else {
     setDiagStatus(
-      `Video stress stopped: total limit ${fmtNum(s.total_bw_limit_mbps, 2)} Mbps, per stream ${fmtNum(s.per_stream_limit_mbps, 2)} Mbps`
+      `Video stress stopped: total limit ${formatRateKbS(s.total_bw_limit_mb_s * 1024)}, per stream ${formatRateKbS(s.per_stream_limit_mb_s * 1024)}`
     );
   }
   if (lastDiagSnapshot) {
@@ -1049,10 +1136,10 @@ function stopStressTest({ byTimeout = false } = {}) {
 function simulateVideoSample(elapsedMs) {
   const vehicleCount = Math.max(1, stressState.vehicle_count || 1);
   const progress = clamp(elapsedMs / 60_000, 0, 1);
-  const perStreamOffered = 1.2 + progress * 10.0;
-  const offeredMbps = perStreamOffered * vehicleCount;
-  const capacity = Math.max(8, stressState.simulated_capacity_mbps);
-  const load = offeredMbps / capacity;
+  const perStreamOfferedMbS = 0.15 + progress * 1.25;
+  const offeredMbS = perStreamOfferedMbS * vehicleCount;
+  const capacityMbS = Math.max(1, stressState.simulated_capacity_mb_s);
+  const load = offeredMbS / capacityMbS;
 
   const baseLoss = 0.2 + Math.random() * 0.35;
   const overloadLoss = load > 1 ? (load - 1) * (18 + vehicleCount * 1.3) + Math.random() * 1.5 : 0;
@@ -1062,17 +1149,17 @@ function simulateVideoSample(elapsedMs) {
   const overloadJitter = load > 1 ? (load - 1) * 30 + Math.random() * 5 : 0;
   const jitterMs = clamp(baseJitter + overloadJitter, 0.5, 120);
 
-  let deliveredMbps = offeredMbps * (1 - lossPct / 100);
-  deliveredMbps = Math.min(deliveredMbps, capacity * (0.95 + Math.random() * 0.05));
-  deliveredMbps = Math.max(0, deliveredMbps);
-  const perStreamDeliveredMbps = deliveredMbps / vehicleCount;
+  let deliveredMbS = offeredMbS * (1 - lossPct / 100);
+  deliveredMbS = Math.min(deliveredMbS, capacityMbS * (0.95 + Math.random() * 0.05));
+  deliveredMbS = Math.max(0, deliveredMbS);
+  const perStreamDeliveredMbS = deliveredMbS / vehicleCount;
 
   return {
     t: Date.now(),
     elapsed_ms: elapsedMs,
-    offered_mbps: offeredMbps,
-    delivered_mbps: deliveredMbps,
-    per_stream_delivered_mbps: perStreamDeliveredMbps,
+    offered_mb_s: offeredMbS,
+    delivered_mb_s: deliveredMbS,
+    per_stream_delivered_mb_s: perStreamDeliveredMbS,
     loss_pct: lossPct,
     jitter_ms: jitterMs,
   };
@@ -1089,7 +1176,7 @@ function runStressTick() {
   const remaining = Math.max(0, Math.ceil((60_000 - elapsed) / 1000));
   const s = stressSummary();
   setDiagStatus(
-    `Video stress (${remaining}s left): delivered ${fmtNum(s.current_delivered_mbps, 2)} Mbps, loss ${fmtNum(s.avg_packet_loss_pct, 2)}%, jitter ${fmtNum(s.p95_jitter_ms, 1)}ms`
+    `Video stress (${remaining}s left): delivered ${formatRateKbS(s.current_delivered_mb_s * 1024)}, loss ${fmtNum(s.avg_packet_loss_pct, 2)}%, jitter ${fmtNum(s.p95_jitter_ms, 1)}ms`
   );
   if (lastDiagSnapshot) {
     renderDiagnostics(lastDiagSnapshot);
@@ -1102,11 +1189,11 @@ function startStressTest() {
   clearStressState();
   stressState.running = true;
   stressState.vehicle_count = getVideoVehicleCount();
-  stressState.simulated_capacity_mbps = clamp(10 + Math.random() * 18 - stressState.vehicle_count * 0.6, 8, 35);
+  stressState.simulated_capacity_mb_s = clamp(1.2 + Math.random() * 2.2 - stressState.vehicle_count * 0.075, 1.0, 4.3);
   stressState.startedAt = Date.now();
   stressState.stopAt = stressState.startedAt + 60_000;
   setDiagStatus(
-    `Video simulation started: ${stressState.vehicle_count} robots, link cap ${fmtNum(stressState.simulated_capacity_mbps, 2)} Mbps`
+    `Video simulation started: ${stressState.vehicle_count} robots, link cap ${formatRateKbS(stressState.simulated_capacity_mb_s * 1024)}`
   );
   stressTimer = setInterval(() => {
     runStressTick();
@@ -1196,6 +1283,18 @@ async function refreshFormation({ quiet = true } = {}) {
   const data = await api("/formation");
   formationStatus.textContent = JSON.stringify(data, null, 2);
   if (!quiet) print(data);
+}
+
+async function refreshAll({ quiet = true } = {}) {
+  const tasks = [refreshRobots({ quiet }), refreshFormation({ quiet: true })];
+  if (document.body.classList.contains("show-diagnostics")) {
+    tasks.push(refreshDiagnosticsSnapshot({ quiet: true }));
+  }
+  const results = await Promise.allSettled(tasks);
+  const failed = results.find((result) => result.status === "rejected");
+  if (failed) {
+    print({ warning: "Refresh after video settings failed", error: String(failed.reason) });
+  }
 }
 
 function resetAutoRefresh() {
@@ -1485,6 +1584,17 @@ autoRefreshToggle.onchange = () => {
   resetDiagnosticsAutoRefresh();
 };
 
+if (applyVideoQualityBtn) {
+  applyVideoQualityBtn.onclick = async () => {
+    try {
+      await applyVideoQuality();
+    } catch (err) {
+      if (videoQualityStatus) videoQualityStatus.textContent = "Video settings failed";
+      print({ error: String(err) });
+    }
+  };
+}
+
 window.addEventListener("resize", () => {
   drawNetworkChart();
   drawDiagChart();
@@ -1493,6 +1603,7 @@ window.addEventListener("resize", () => {
 applyNeoTheme();
 setDiagStatus("Idle.");
 setView(localStorage.getItem("autofleet_view") || "control");
+loadVideoSettings().catch(() => {});
 refreshRobots()
   .then(() => refreshDiagnosticsSnapshot({ quiet: true }))
   .catch((err) => print({ error: String(err) }));

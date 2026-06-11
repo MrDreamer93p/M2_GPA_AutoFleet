@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -11,7 +13,7 @@ from typing import Any
 import cv2
 import numpy as np
 import paho.mqtt.client as mqtt
-from fastapi import FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 
 
@@ -22,8 +24,129 @@ TOPIC_PREFIX = os.getenv("AUTOFLEET_TOPIC_PREFIX", "fleet/v1")
 VIDEO_PUBLIC_BASE = os.getenv("AUTOFLEET_VIDEO_PUBLIC_BASE", "http://127.0.0.1:8400").rstrip("/")
 SNAPSHOT_DIR = Path(os.getenv("AUTOFLEET_VIDEO_SNAPSHOT_DIR", "/artifacts/snapshots"))
 HEARTBEAT_INTERVAL_MS = int(os.getenv("AUTOFLEET_HEARTBEAT_INTERVAL_MS", "2000"))
+CAPTURE_INTERVAL_MS = int(os.getenv("AUTOFLEET_VIDEO_CAPTURE_INTERVAL_MS", "50"))
+MJPEG_INTERVAL_MS = int(os.getenv("AUTOFLEET_MJPEG_INTERVAL_MS", "50"))
+FFMPEG_DIRECT_MJPEG = os.getenv("AUTOFLEET_FFMPEG_DIRECT_MJPEG", "1").strip().lower() not in {"0", "false", "no"}
+FFMPEG_RTSP_TRANSPORT = os.getenv("AUTOFLEET_FFMPEG_RTSP_TRANSPORT", "udp").strip().lower()
+FFMPEG_MJPEG_FPS = int(os.getenv("AUTOFLEET_FFMPEG_MJPEG_FPS", "20"))
+FFMPEG_MJPEG_WIDTH = int(os.getenv("AUTOFLEET_FFMPEG_MJPEG_WIDTH", "640"))
+MJPEG_JPEG_QUALITY = int(os.getenv("AUTOFLEET_MJPEG_JPEG_QUALITY", "62"))
+FFMPEG_EXE = os.getenv("AUTOFLEET_FFMPEG_EXE", "").strip()
+_FFMPEG_CACHE: str | None = None
+
+VIDEO_QUALITY_PRESETS: dict[str, dict[str, Any]] = {
+    "ultra_low_latency": {
+        "label": "Ultra Low Latency",
+        "max_width": 360,
+        "jpeg_quality": 54,
+        "mjpeg_interval_ms": 40,
+        "capture_interval_ms": 30,
+        "direct_mjpeg": False,
+    },
+    "balanced": {
+        "label": "Balanced",
+        "max_width": 640,
+        "jpeg_quality": 68,
+        "mjpeg_interval_ms": 30,
+        "capture_interval_ms": 20,
+        "direct_mjpeg": False,
+    },
+    "quality": {
+        "label": "Quality",
+        "max_width": 960,
+        "jpeg_quality": 76,
+        "mjpeg_interval_ms": 35,
+        "capture_interval_ms": 25,
+        "direct_mjpeg": False,
+    },
+    "high_quality": {
+        "label": "High Quality",
+        "max_width": 1280,
+        "jpeg_quality": 82,
+        "mjpeg_interval_ms": 45,
+        "capture_interval_ms": 35,
+        "direct_mjpeg": False,
+    },
+}
+
+
+class VideoSettings:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        preset = os.getenv("AUTOFLEET_VIDEO_QUALITY_PRESET", "balanced").strip().lower()
+        if preset not in VIDEO_QUALITY_PRESETS:
+            preset = "balanced"
+        self._settings = dict(VIDEO_QUALITY_PRESETS[preset])
+        self._settings.update(
+            {
+                "preset": preset,
+                "max_width": int(os.getenv("AUTOFLEET_VIDEO_MAX_WIDTH", str(self._settings["max_width"]))),
+                "jpeg_quality": int(os.getenv("AUTOFLEET_MJPEG_JPEG_QUALITY", str(self._settings["jpeg_quality"]))),
+                "mjpeg_interval_ms": int(os.getenv("AUTOFLEET_MJPEG_INTERVAL_MS", str(self._settings["mjpeg_interval_ms"]))),
+                "capture_interval_ms": int(os.getenv("AUTOFLEET_VIDEO_CAPTURE_INTERVAL_MS", str(self._settings["capture_interval_ms"]))),
+                "direct_mjpeg": FFMPEG_DIRECT_MJPEG,
+            }
+        )
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            payload = dict(self._settings)
+        return {"presets": VIDEO_QUALITY_PRESETS, "current": payload}
+
+    def current(self) -> dict[str, Any]:
+        with self._lock:
+            return dict(self._settings)
+
+    def apply(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            preset = str(payload.get("preset") or self._settings.get("preset") or "balanced").strip().lower()
+            if preset not in VIDEO_QUALITY_PRESETS:
+                raise ValueError(f"Unknown video quality preset: {preset}")
+            next_settings = dict(VIDEO_QUALITY_PRESETS[preset])
+            next_settings["preset"] = preset
+            for key in ("max_width", "jpeg_quality", "mjpeg_interval_ms", "capture_interval_ms"):
+                if key in payload and payload[key] is not None:
+                    next_settings[key] = int(payload[key])
+            if "direct_mjpeg" in payload and payload["direct_mjpeg"] is not None:
+                next_settings["direct_mjpeg"] = bool(payload["direct_mjpeg"])
+            next_settings["max_width"] = max(160, min(1920, int(next_settings["max_width"])))
+            next_settings["jpeg_quality"] = max(35, min(92, int(next_settings["jpeg_quality"])))
+            next_settings["mjpeg_interval_ms"] = max(20, min(200, int(next_settings["mjpeg_interval_ms"])))
+            next_settings["capture_interval_ms"] = max(15, min(200, int(next_settings["capture_interval_ms"])))
+            self._settings = next_settings
+            return dict(self._settings)
+
+
+video_settings = VideoSettings()
 
 SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+
+for stale_snapshot in SNAPSHOT_DIR.glob("*.jpg"):
+    try:
+        stale_snapshot.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def find_ffmpeg() -> str | None:
+    global _FFMPEG_CACHE
+    if _FFMPEG_CACHE:
+        return _FFMPEG_CACHE
+    if FFMPEG_EXE:
+        target = Path(FFMPEG_EXE).expanduser()
+        if target.exists():
+            _FFMPEG_CACHE = str(target)
+            return _FFMPEG_CACHE
+    found = shutil.which("ffmpeg")
+    if found:
+        _FFMPEG_CACHE = found
+        return _FFMPEG_CACHE
+    winget_root = Path(os.getenv("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Packages"
+    if winget_root.exists():
+        for target in winget_root.glob("Gyan.FFmpeg*/*/bin/ffmpeg.exe"):
+            _FFMPEG_CACHE = str(target)
+            return _FFMPEG_CACHE
+    return None
 
 
 class StreamRegistry:
@@ -80,6 +203,7 @@ class StreamRegistry:
                         "proxy_url": status.get("proxy_url"),
                         "snapshot_url": status.get("snapshot_url"),
                         "fps": status.get("fps"),
+                        "bitrate_kb_s": status.get("bitrate_kb_s"),
                         "bitrate_kbps": status.get("bitrate_kbps"),
                         "note": status.get("note"),
                     }
@@ -92,6 +216,7 @@ class FrameProvider:
         self.registry = registry
         self._lock = threading.Lock()
         self._captures: dict[str, tuple[str, str, cv2.VideoCapture]] = {}
+        self._latest: dict[str, tuple[np.ndarray, str, str, float, str | None, str | None]] = {}
 
     def _release_capture(self, robot_id: str) -> None:
         with self._lock:
@@ -131,6 +256,7 @@ class FrameProvider:
         if not cap.isOpened():
             cap.release()
             return None
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         return cap
 
     def _get_capture(self, robot_id: str, source_url: str | None) -> tuple[str, cv2.VideoCapture] | None:
@@ -184,42 +310,6 @@ class FrameProvider:
             return "file"
         return "video"
 
-    def _synthetic_frame(self, robot_id: str, entry: dict[str, Any]) -> np.ndarray:
-        h, w = 360, 640
-        img = np.zeros((h, w, 3), dtype=np.uint8)
-        img[:] = (18, 22, 30)
-        accent = ((hash(robot_id) >> 8) & 0x7F) + 100
-        cv2.rectangle(img, (18, 18), (w - 18, h - 18), (accent, 160, 240), 2)
-        cv2.putText(img, f"AUTOFLEET {robot_id}", (28, 56), cv2.FONT_HERSHEY_SIMPLEX, 1.05, (255, 255, 255), 2)
-        cv2.putText(img, f"State: {entry.get('state') or 'UNKNOWN'}", (28, 98), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (160, 220, 255), 2)
-        cv2.putText(img, f"Battery: {entry.get('battery', '-')}", (28, 132), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (190, 255, 180), 2)
-        pose = entry.get("pose") or {}
-        cv2.putText(
-            img,
-            f"Pose: {pose.get('x', '-')} , {pose.get('y', '-')} , {pose.get('yaw', '-')}",
-            (28, 166),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.62,
-            (220, 220, 220),
-            2,
-        )
-        cv2.putText(img, time.strftime("%H:%M:%S"), (28, h - 26), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 215, 120), 2)
-
-        t = int(time.time())
-        center_x = 110 + (t * 13 + abs(hash(robot_id)) % 160) % (w - 180)
-        center_y = 210 + int(34 * np.sin(t / 2))
-        cv2.circle(img, (center_x, center_y), 26, (90, 200, 255), -1)
-        cv2.putText(img, "TARGET", (center_x - 36, center_y + 48), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (120, 210, 255), 2)
-
-        hazard_on = (t // 5 + abs(hash(robot_id))) % 4 == 0
-        if hazard_on:
-            cv2.rectangle(img, (w - 190, 72), (w - 40, 172), (0, 0, 255), -1)
-            cv2.putText(img, "HAZARD", (w - 174, 128), cv2.FONT_HERSHEY_SIMPLEX, 0.95, (255, 255, 255), 2)
-        else:
-            cv2.rectangle(img, (w - 190, 72), (w - 40, 172), (20, 120, 30), -1)
-            cv2.putText(img, "CLEAR", (w - 160, 128), cv2.FONT_HERSHEY_SIMPLEX, 0.95, (255, 255, 255), 2)
-        return img
-
     @staticmethod
     def _crop_resize(frame: np.ndarray, left: float, top: float, right: float, bottom: float) -> np.ndarray:
         h, w = frame.shape[:2]
@@ -265,7 +355,17 @@ class FrameProvider:
             return self._crop_resize(frame, 0.28, 0.20, 0.72, 0.90)
         return frame
 
-    def get_frame(self, robot_id: str) -> tuple[np.ndarray, str, str]:
+    @staticmethod
+    def _apply_output_profile(frame: np.ndarray) -> np.ndarray:
+        settings = video_settings.current()
+        max_width = int(settings.get("max_width") or 640)
+        h, w = frame.shape[:2]
+        if w <= max_width:
+            return frame
+        target_h = max(1, int(h * (max_width / w)))
+        return cv2.resize(frame, (max_width, target_h), interpolation=cv2.INTER_AREA)
+
+    def get_frame(self, robot_id: str) -> tuple[np.ndarray, str, str] | None:
         entry = self.registry.get(robot_id)
         if entry is None:
             raise KeyError(robot_id)
@@ -281,6 +381,7 @@ class FrameProvider:
             if frame is not None:
                 frame = self._apply_view_profile(frame, view_profile)
                 frame = self._annotate_view(frame, robot_id, view_profile)
+                frame = self._apply_output_profile(frame)
                 status = "online"
                 if view_profile:
                     note = f"{self._source_label(source_kind)} source ingested successfully ({view_profile})"
@@ -289,16 +390,47 @@ class FrameProvider:
             else:
                 self._release_capture(robot_id)
                 status = "degraded"
-                note = f"{self._source_label(source_kind)} source unavailable, fallback to synthetic proxy frame"
+                note = f"{self._source_label(source_kind)} source unavailable; no proxy frame published"
         if frame is None:
-            frame = self._synthetic_frame(robot_id, entry)
             if source_url:
                 status = "degraded"
-                note = note or "Synthetic proxy frame generated while waiting for upstream video source"
+                note = note or "Upstream video source is not reachable; waiting for real frames"
             else:
                 status = "offline"
-                note = "No upstream RTSP yet, synthetic preview only"
+                note = "No upstream video source registered"
+            with self._lock:
+                self._latest.pop(robot_id, None)
+            return None
         return frame, status, note
+
+    def update_latest_frame(self, robot_id: str) -> tuple[np.ndarray, str, str] | None:
+        try:
+            result = self.get_frame(robot_id)
+        except KeyError:
+            return None
+        if result is None:
+            return None
+        frame, status, note = result
+        entry = self.registry.get(robot_id) or {}
+        with self._lock:
+            self._latest[robot_id] = (
+                frame,
+                status,
+                note,
+                time.time(),
+                entry.get("video_rtsp_url"),
+                entry.get("video_view_profile"),
+            )
+        return frame, status, note
+
+    def latest_frame(self, robot_id: str) -> tuple[np.ndarray, str, str, float, str | None, str | None] | None:
+        with self._lock:
+            cached = self._latest.get(robot_id)
+        if cached is None:
+            self.update_latest_frame(robot_id)
+            with self._lock:
+                cached = self._latest.get(robot_id)
+        return cached
 
 
 registry = StreamRegistry()
@@ -306,6 +438,176 @@ provider = FrameProvider(registry)
 mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 stop_event = threading.Event()
 publisher_thread: threading.Thread | None = None
+capture_thread: threading.Thread | None = None
+
+
+class FfmpegFrameHub:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._streams: dict[str, dict[str, Any]] = {}
+
+    def stop_all(self) -> None:
+        with self._lock:
+            robot_ids = list(self._streams)
+        for robot_id in robot_ids:
+            self.stop(robot_id)
+
+    def stop(self, robot_id: str) -> None:
+        with self._lock:
+            stream = self._streams.pop(robot_id, None)
+        if not stream:
+            return
+        stream["stop"].set()
+        proc = stream.get("proc")
+        if proc and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+    def ensure(self, robot_id: str, source_url: str) -> None:
+        source_url = str(source_url or "").strip()
+        if not source_url.lower().startswith("rtsp://"):
+            return
+        with self._lock:
+            existing = self._streams.get(robot_id)
+            if existing and existing.get("source_url") == source_url:
+                proc = existing.get("proc")
+                if proc is not None and proc.poll() is None:
+                    return
+        self.stop(robot_id)
+        stop_flag = threading.Event()
+        stream = {
+            "source_url": source_url,
+            "stop": stop_flag,
+            "latest_jpeg": None,
+            "latest_frame": None,
+            "latest_ts": 0.0,
+            "status": "offline",
+            "note": "FFmpeg stream starting",
+            "proc": None,
+        }
+        with self._lock:
+            self._streams[robot_id] = stream
+        thread = threading.Thread(target=self._run, args=(robot_id, stream), daemon=True, name=f"ffmpeg-hub-{robot_id}")
+        stream["thread"] = thread
+        thread.start()
+
+    def latest(self, robot_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            stream = self._streams.get(robot_id)
+            if not stream:
+                return None
+            return {
+                "source_url": stream.get("source_url"),
+                "latest_jpeg": stream.get("latest_jpeg"),
+                "latest_frame": stream.get("latest_frame"),
+                "latest_ts": stream.get("latest_ts", 0.0),
+                "status": stream.get("status", "offline"),
+                "note": stream.get("note", ""),
+            }
+
+    def _run(self, robot_id: str, stream: dict[str, Any]) -> None:
+        ffmpeg = find_ffmpeg()
+        if ffmpeg is None:
+            with self._lock:
+                stream["status"] = "degraded"
+                stream["note"] = "ffmpeg.exe not found"
+            return
+        with self._lock:
+            stream["status"] = "degraded"
+            stream["note"] = f"Starting ffmpeg: {Path(ffmpeg).name}"
+        source_url = str(stream["source_url"])
+        transport = FFMPEG_RTSP_TRANSPORT if FFMPEG_RTSP_TRANSPORT in {"udp", "tcp", "udp_multicast", "http", "https"} else "tcp"
+        vf = f"fps={max(1, FFMPEG_MJPEG_FPS)},scale={max(160, FFMPEG_MJPEG_WIDTH)}:-1"
+        cmd = [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-avioflags",
+            "direct",
+            "-fflags",
+            "nobuffer+discardcorrupt",
+            "-flags",
+            "low_delay",
+            "-rtsp_transport",
+            transport,
+            "-reorder_queue_size",
+            "0",
+            "-probesize",
+            "32768",
+            "-analyzeduration",
+            "0",
+            "-max_delay",
+            "250000",
+            "-i",
+            source_url,
+            "-an",
+            "-vf",
+            vf,
+            "-vsync",
+            "0",
+            "-q:v",
+            "7",
+            "-flush_packets",
+            "1",
+            "-f",
+            "image2pipe",
+            "-vcodec",
+            "mjpeg",
+            "pipe:1",
+        ]
+        kwargs: dict[str, Any] = {"stdout": subprocess.PIPE, "stderr": subprocess.DEVNULL, "bufsize": 0}
+        if hasattr(subprocess, "CREATE_NO_WINDOW"):
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        buffer = b""
+        try:
+            proc = subprocess.Popen(cmd, **kwargs)
+            with self._lock:
+                stream["proc"] = proc
+                stream["status"] = "degraded"
+                stream["note"] = "FFmpeg connected, waiting for frames"
+            assert proc.stdout is not None
+            while not stream["stop"].is_set():
+                chunk = proc.stdout.read(4096)
+                if not chunk:
+                    break
+                buffer += chunk
+                while True:
+                    soi = buffer.find(b"\xff\xd8")
+                    eoi = buffer.find(b"\xff\xd9", soi + 2) if soi >= 0 else -1
+                    if soi < 0:
+                        buffer = buffer[-2:]
+                        break
+                    if eoi < 0:
+                        buffer = buffer[soi:]
+                        break
+                    jpeg = buffer[soi : eoi + 2]
+                    buffer = buffer[eoi + 2 :]
+                    arr = np.frombuffer(jpeg, dtype=np.uint8)
+                    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                    with self._lock:
+                        stream["latest_jpeg"] = jpeg
+                        stream["latest_frame"] = frame
+                        stream["latest_ts"] = time.time()
+                        stream["status"] = "online"
+                        stream["note"] = f"FFmpeg RTSP stream online ({transport})"
+            with self._lock:
+                stream["status"] = "degraded"
+                stream["note"] = "FFmpeg stream ended"
+        except Exception as exc:
+            with self._lock:
+                stream["status"] = "degraded"
+                stream["note"] = f"FFmpeg stream failed: {exc}"
+        finally:
+            proc = stream.get("proc")
+            if proc and proc.poll() is None:
+                proc.terminate()
+
+
+ffmpeg_hub = FfmpegFrameHub()
 
 
 def publish_service_heartbeat() -> None:
@@ -332,7 +634,11 @@ def publish_video_status(
     h, w = frame.shape[:2]
     snapshot_name = f"{robot_id}.jpg"
     snapshot_path = SNAPSHOT_DIR / snapshot_name
-    cv2.imwrite(str(snapshot_path), frame)
+    settings = video_settings.current()
+    jpeg_quality = int(settings.get("jpeg_quality") or MJPEG_JPEG_QUALITY)
+    cv2.imwrite(str(snapshot_path), frame, [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality])
+    fps = round(1000 / max(1, int(settings.get("mjpeg_interval_ms") or MJPEG_INTERVAL_MS)), 1)
+    bitrate_kb_s = round((w * h * 3 * fps) / 1024 / max(1.0, 100 - jpeg_quality), 1)
     payload = {
         "v": 1,
         "schema": "autofleet.video_status.v1",
@@ -344,10 +650,45 @@ def publish_video_status(
         "view_profile": view_profile,
         "status": status,
         "codec": "mjpeg",
-        "fps": 6.0,
-        "bitrate_kbps": round((w * h * 3 * 6.0) / 1000 / 5, 1),
+        "fps": fps,
+        "bitrate_kb_s": bitrate_kb_s,
+        "bitrate_kbps": round(bitrate_kb_s * 8192 / 1000, 1),
         "width": int(w),
         "height": int(h),
+        "note": f"{note}; quality={settings.get('preset')}",
+    }
+    registry.update_status(robot_id, payload)
+    mqtt_client.publish(f"{TOPIC_PREFIX}/video_status/{robot_id}", json.dumps(payload), qos=0)
+
+
+def publish_video_unavailable(
+    robot_id: str,
+    status: str,
+    note: str,
+    source_url: str | None,
+    view_profile: str | None,
+) -> None:
+    snapshot_path = SNAPSHOT_DIR / f"{robot_id}.jpg"
+    try:
+        snapshot_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    payload = {
+        "v": 1,
+        "schema": "autofleet.video_status.v1",
+        "robot_id": robot_id,
+        "ts": int(time.time()),
+        "source_url": source_url,
+        "proxy_url": None,
+        "snapshot_url": None,
+        "view_profile": view_profile,
+        "status": status,
+        "codec": "mjpeg",
+        "fps": 0.0,
+        "bitrate_kb_s": 0.0,
+        "bitrate_kbps": 0.0,
+        "width": 0,
+        "height": 0,
         "note": note,
     }
     registry.update_status(robot_id, payload)
@@ -359,14 +700,54 @@ def publisher_loop() -> None:
     while not stop_event.wait(interval_s):
         publish_service_heartbeat()
         for robot_id in registry.robot_ids():
-            try:
-                frame, status, note = provider.get_frame(robot_id)
-            except KeyError:
-                continue
             entry = registry.get(robot_id) or {}
-            source_url = entry.get("video_rtsp_url")
+            source_url = str(entry.get("video_rtsp_url") or "").strip()
             view_profile = entry.get("video_view_profile")
+            if bool(video_settings.current().get("direct_mjpeg")) and source_url.lower().startswith("rtsp://"):
+                ffmpeg_hub.ensure(robot_id, source_url)
+                latest = ffmpeg_hub.latest(robot_id)
+                if latest and latest.get("latest_frame") is not None:
+                    frame = latest["latest_frame"]
+                    publish_video_status(
+                        robot_id,
+                        str(latest.get("status") or "online"),
+                        str(latest.get("note") or "FFmpeg RTSP stream online"),
+                        frame,
+                        source_url,
+                        view_profile,
+                    )
+                    continue
+                publish_video_unavailable(
+                    robot_id,
+                    str((latest or {}).get("status") or "degraded"),
+                    str((latest or {}).get("note") or "FFmpeg RTSP stream has not produced real frames yet"),
+                    source_url,
+                    view_profile,
+                )
+                continue
+            latest = provider.latest_frame(robot_id)
+            if latest is None:
+                publish_video_unavailable(
+                    robot_id,
+                    "degraded" if source_url else "offline",
+                    "Upstream video source is not reachable; waiting for real frames" if source_url else "No upstream video source registered",
+                    source_url,
+                    view_profile,
+                )
+                continue
+            frame, status, note, _, source_url, view_profile = latest
             publish_video_status(robot_id, status, note, frame, source_url, view_profile)
+
+
+def capture_loop() -> None:
+    while not stop_event.wait(max(0.015, int(video_settings.current().get("capture_interval_ms") or CAPTURE_INTERVAL_MS) / 1000)):
+        for robot_id in registry.robot_ids():
+            entry = registry.get(robot_id) or {}
+            source_url = str(entry.get("video_rtsp_url") or "").strip()
+            if bool(video_settings.current().get("direct_mjpeg")) and source_url.lower().startswith("rtsp://"):
+                ffmpeg_hub.ensure(robot_id, source_url)
+                continue
+            provider.update_latest_frame(robot_id)
 
 
 def on_connect(client: mqtt.Client, *_: Any) -> None:
@@ -387,16 +768,21 @@ mqtt_client.on_message = on_message
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global publisher_thread
+    global publisher_thread, capture_thread
     stop_event.clear()
     mqtt_client.connect(MQTT_HOST, MQTT_PORT, MQTT_KEEPALIVE)
     mqtt_client.loop_start()
+    capture_thread = threading.Thread(target=capture_loop, daemon=True, name="video-worker-capture")
+    capture_thread.start()
     publisher_thread = threading.Thread(target=publisher_loop, daemon=True, name="video-worker-publisher")
     publisher_thread.start()
     try:
         yield
     finally:
         stop_event.set()
+        ffmpeg_hub.stop_all()
+        if capture_thread and capture_thread.is_alive():
+            capture_thread.join(timeout=1.5)
         if publisher_thread and publisher_thread.is_alive():
             publisher_thread.join(timeout=1.5)
         mqtt_client.loop_stop()
@@ -426,22 +812,80 @@ def snapshot(name: str) -> FileResponse:
 
 def mjpeg_generator(robot_id: str):
     while True:
-        frame, _, _ = provider.get_frame(robot_id)
-        ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+        settings = video_settings.current()
+        interval_s = max(0.02, int(settings.get("mjpeg_interval_ms") or MJPEG_INTERVAL_MS) / 1000)
+        jpeg_quality = int(settings.get("jpeg_quality") or MJPEG_JPEG_QUALITY)
+        latest = provider.latest_frame(robot_id)
+        if latest is None:
+            time.sleep(interval_s)
+            continue
+        frame = latest[0]
+        ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality])
         if not ok:
-            time.sleep(0.15)
+            time.sleep(interval_s)
             continue
         chunk = encoded.tobytes()
         yield (
             b"--frame\r\n"
             b"Content-Type: image/jpeg\r\n"
+            b"Cache-Control: no-store, no-cache, must-revalidate, max-age=0\r\n"
+            b"Pragma: no-cache\r\n"
             b"Content-Length: " + str(len(chunk)).encode("ascii") + b"\r\n\r\n" + chunk + b"\r\n"
         )
-        time.sleep(0.15)
+        time.sleep(interval_s)
+
+
+def ffmpeg_hub_mjpeg_generator(robot_id: str, source_url: str):
+    ffmpeg_hub.ensure(robot_id, source_url)
+    last_ts = 0.0
+    while True:
+        interval_s = max(0.02, int(video_settings.current().get("mjpeg_interval_ms") or MJPEG_INTERVAL_MS) / 1000)
+        latest = ffmpeg_hub.latest(robot_id)
+        if not latest or latest.get("latest_jpeg") is None:
+            time.sleep(interval_s)
+            continue
+        ts = float(latest.get("latest_ts") or 0.0)
+        if ts <= last_ts:
+            time.sleep(interval_s)
+            continue
+        last_ts = ts
+        chunk = latest["latest_jpeg"]
+        yield (
+            b"--frame\r\n"
+            b"Content-Type: image/jpeg\r\n"
+            b"Cache-Control: no-store\r\n"
+            b"Content-Length: " + str(len(chunk)).encode("ascii") + b"\r\n\r\n" + chunk + b"\r\n"
+        )
 
 
 @app.get("/streams/{robot_id}.mjpeg")
 def stream(robot_id: str) -> StreamingResponse:
-    if registry.get(robot_id) is None:
+    entry = registry.get(robot_id)
+    if entry is None:
         raise HTTPException(status_code=404, detail=f"Robot {robot_id} not found")
-    return StreamingResponse(mjpeg_generator(robot_id), media_type="multipart/x-mixed-replace; boundary=frame")
+    source_url = str(entry.get("video_rtsp_url") or "").strip()
+    if bool(video_settings.current().get("direct_mjpeg")) and source_url.lower().startswith("rtsp://") and find_ffmpeg() is not None:
+        return StreamingResponse(
+            ffmpeg_hub_mjpeg_generator(robot_id, source_url),
+            media_type="multipart/x-mixed-replace; boundary=frame",
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"},
+        )
+    return StreamingResponse(
+        mjpeg_generator(robot_id),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"},
+    )
+
+
+@app.get("/settings")
+def get_settings() -> dict[str, Any]:
+    return video_settings.snapshot()
+
+
+@app.post("/settings")
+def update_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        current = video_settings.apply(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"current": current, "presets": VIDEO_QUALITY_PRESETS}

@@ -1,0 +1,228 @@
+﻿{
+    "executed_at":  "2026-04-16T10:35:59.6850255+02:00",
+    "request_count":  30,
+    "successful_requests":  30,
+    "failed_requests":  0,
+    "average_http_response_ms":  45.89,
+    "total_elapsed_ms":  8162.32,
+    "final_pending_commands":  0,
+    "final_online_robots":  3,
+    "criteria":  {
+                     "no_http_failures":  true,
+                     "pending_commands_zero":  true,
+                     "all_robots_online":  true,
+                     "average_http_response_under_500ms":  true
+                 },
+    "samples":  [
+                    {
+                        "robot_id":  "R1",
+                        "iteration":  0,
+                        "ok":  true,
+                        "elapsed_ms":  141.78,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R2",
+                        "iteration":  0,
+                        "ok":  true,
+                        "elapsed_ms":  17.11,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R3",
+                        "iteration":  0,
+                        "ok":  true,
+                        "elapsed_ms":  16.4,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R1",
+                        "iteration":  1,
+                        "ok":  true,
+                        "elapsed_ms":  58.34,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R2",
+                        "iteration":  1,
+                        "ok":  true,
+                        "elapsed_ms":  37.63,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R3",
+                        "iteration":  1,
+                        "ok":  true,
+                        "elapsed_ms":  80.9,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R1",
+                        "iteration":  2,
+                        "ok":  true,
+                        "elapsed_ms":  59.51,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R2",
+                        "iteration":  2,
+                        "ok":  true,
+                        "elapsed_ms":  142.88,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R3",
+                        "iteration":  2,
+                        "ok":  true,
+                        "elapsed_ms":  125.33,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R1",
+                        "iteration":  3,
+                        "ok":  true,
+                        "elapsed_ms":  33.16,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R2",
+                        "iteration":  3,
+                        "ok":  true,
+                        "elapsed_ms":  45.16,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R3",
+                        "iteration":  3,
+                        "ok":  true,
+                        "elapsed_ms":  97.54,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R1",
+                        "iteration":  4,
+                        "ok":  true,
+                        "elapsed_ms":  17.86,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R2",
+                        "iteration":  4,
+                        "ok":  true,
+                        "elapsed_ms":  108.98,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R3",
+                        "iteration":  4,
+                        "ok":  true,
+                        "elapsed_ms":  25.57,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R1",
+                        "iteration":  5,
+                        "ok":  true,
+                        "elapsed_ms":  21.28,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R2",
+                        "iteration":  5,
+                        "ok":  true,
+                        "elapsed_ms":  14.03,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R3",
+                        "iteration":  5,
+                        "ok":  true,
+                        "elapsed_ms":  25.32,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R1",
+                        "iteration":  6,
+                        "ok":  true,
+                        "elapsed_ms":  19.68,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R2",
+                        "iteration":  6,
+                        "ok":  true,
+                        "elapsed_ms":  14.54,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R3",
+                        "iteration":  6,
+                        "ok":  true,
+                        "elapsed_ms":  16.38,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R1",
+                        "iteration":  7,
+                        "ok":  true,
+                        "elapsed_ms":  11.1,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R2",
+                        "iteration":  7,
+                        "ok":  true,
+                        "elapsed_ms":  21.36,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R3",
+                        "iteration":  7,
+                        "ok":  true,
+                        "elapsed_ms":  13.48,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R1",
+                        "iteration":  8,
+                        "ok":  true,
+                        "elapsed_ms":  12.81,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R2",
+                        "iteration":  8,
+                        "ok":  true,
+                        "elapsed_ms":  14.33,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R3",
+                        "iteration":  8,
+                        "ok":  true,
+                        "elapsed_ms":  26.69,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R1",
+                        "iteration":  9,
+                        "ok":  true,
+                        "elapsed_ms":  15.38,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R2",
+                        "iteration":  9,
+                        "ok":  true,
+                        "elapsed_ms":  98.37,
+                        "cmd_id":  null
+                    },
+                    {
+                        "robot_id":  "R3",
+                        "iteration":  9,
+                        "ok":  true,
+                        "elapsed_ms":  43.87,
+                        "cmd_id":  null
+                    }
+                ]
+}

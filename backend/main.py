@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import json
 import time
 from contextlib import asynccontextmanager
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from autofleet_backend.app_state import AppState
+from autofleet_backend.config import settings
 from autofleet_backend.models import (
     AlertAckRequest,
     CommandRequest,
@@ -219,6 +223,30 @@ def list_video_streams() -> dict[str, Any]:
     return {"items": state.runtime.list_video_streams()}
 
 
+def video_worker_request(path: str, *, method: str = "GET", payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    url = f"{settings.video_worker_base.rstrip('/')}{path}"
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = Request(url, data=body, method=method, headers={"Content-Type": "application/json"})
+    try:
+        with urlopen(request, timeout=4) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise HTTPException(status_code=exc.code, detail=detail or str(exc)) from exc
+    except URLError as exc:
+        raise HTTPException(status_code=503, detail=f"Video worker unavailable: {exc.reason}") from exc
+
+
+@app.get("/api/v1/video/settings")
+def get_video_settings() -> dict[str, Any]:
+    return video_worker_request("/settings")
+
+
+@app.post("/api/v1/video/settings")
+def update_video_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    return video_worker_request("/settings", method="POST", payload=payload)
+
+
 @app.get("/api/v1/perception")
 def list_perception() -> dict[str, Any]:
     return {"items": [robot.get("latest_perception") for robot in state.runtime.list_robots() if robot.get("latest_perception")]}
@@ -227,6 +255,11 @@ def list_perception() -> dict[str, Any]:
 @app.get("/api/v1/map/summaries")
 def list_map_summaries() -> dict[str, Any]:
     return {"items": state.runtime.list_map_summaries()}
+
+
+@app.get("/api/v1/sensors")
+def list_sensor_summaries() -> dict[str, Any]:
+    return {"items": state.runtime.list_sensor_summaries()}
 
 
 @app.get("/api/v1/coordination")

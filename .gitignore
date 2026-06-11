@@ -13,6 +13,7 @@ Thumbs.db
 
 # Runtime data
 data/logs/
+data/run/
 data/results/
 data/raw/
 data/artifacts/
@@ -20,3 +21,8 @@ data/artifacts/
 # Local env
 .env
 .env.*
+
+# Local editor and temporary captures
+.vscode/
+_simulator*.log
+_tmp_frontend_*

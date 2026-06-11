@@ -97,7 +97,7 @@
             <select id="networkMetricSelect">
               <option value="latency_ms">Latency (ms)</option>
               <option value="jitter_ms">Jitter (ms)</option>
-              <option value="throughput_kbps">Throughput (kbps)</option>
+              <option value="throughput_kb_s">Throughput (KB/s)</option>
               <option value="packet_loss_pct">Packet Loss (%)</option>
               <option value="control_rtt_ms">Control RTT (ms)</option>
             </select>
@@ -123,7 +123,19 @@
     <section class="panel video-panel view-control">
       <div class="section-head">
         <h2>Video Wall</h2>
-        <span class="badge">Browser-playable streams</span>
+        <div class="video-controls">
+          <span class="badge" id="videoQualityStatus">Browser-playable streams</span>
+          <label class="inline metric-inline">
+            Quality
+            <select id="videoQualitySelect">
+              <option value="ultra_low_latency">Ultra Low Latency</option>
+              <option value="balanced" selected>Balanced</option>
+              <option value="quality">Quality</option>
+              <option value="high_quality">High Quality</option>
+            </select>
+          </label>
+          <button id="applyVideoQualityBtn" class="btn subtle">Apply</button>
+        </div>
       </div>
       <div id="videoWall" class="video-wall"></div>
     </section>

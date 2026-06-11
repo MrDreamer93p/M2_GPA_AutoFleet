@@ -199,6 +199,18 @@ class AppState:
             )
             self.pg.upsert_map_summary(summary.robot_id, summary.ts, summary.obstacle_count, summary.risk_level, dump)
             return
+        if "/sensor/" in topic:
+            summary = self.runtime.upsert_sensor_summary(payload)
+            dump = summary.model_dump()
+            self._append_event(
+                f"sensor_{summary.robot_id}",
+                dump,
+                topic=topic,
+                event_type="sensor",
+                robot_id=summary.robot_id,
+                ts=summary.ts,
+            )
+            return
         if "/coordination/" in topic:
             robot_id = str(payload.get("robot_id", "unknown"))
             ts = int(payload.get("ts", now_ts()))
@@ -483,6 +495,7 @@ class AppState:
                 "perception": {"pattern": f"{self.topic_prefix}/perception/{{robot_id}}", "qos": 1, "schema": "autofleet.perception.v1"},
                 "alert": {"pattern": f"{self.topic_prefix}/alert/{{robot_id}}", "qos": 1, "schema": "autofleet.alert.v1"},
                 "map": {"pattern": f"{self.topic_prefix}/map/{{robot_id}}", "qos": 1, "schema": "autofleet.map.v1"},
+                "sensor": {"pattern": f"{self.topic_prefix}/sensor/{{robot_id}}", "qos": 0, "schema": "autofleet.sensor.v1"},
                 "coordination": {"pattern": f"{self.topic_prefix}/coordination/{{robot_id}}", "qos": 1, "schema": "autofleet.coordination.v1"},
             },
             "reliability": {

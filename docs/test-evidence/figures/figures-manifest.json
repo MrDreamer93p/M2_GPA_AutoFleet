@@ -1,0 +1,13 @@
+{
+  "acceptance_source": "docs\\test-evidence\\api\\acceptance-results-20260416-102943.json",
+  "load_source": "docs\\test-evidence\\api\\v2x-load-results-20260416-103551.json",
+  "figures": [
+    "docs\\test-evidence\\figures\\fig01_acceptance_certification_matrix.png",
+    "docs\\test-evidence\\figures\\fig02_subsystem_validation_status.png",
+    "docs\\test-evidence\\figures\\fig03_runtime_evidence_coverage.png",
+    "docs\\test-evidence\\figures\\fig04_v2x_latency_timeseries.png",
+    "docs\\test-evidence\\figures\\fig05_v2x_latency_distribution.png",
+    "docs\\test-evidence\\figures\\fig06_robot_network_metrics.png",
+    "docs\\test-evidence\\figures\\fig07_agile_acceptance_workflow.png"
+  ]
+}

@@ -493,6 +493,13 @@ pre {
   gap: 10px;
 }
 
+.video-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .video-card {
   border: var(--border-w) solid var(--line);
   border-radius: var(--radius);

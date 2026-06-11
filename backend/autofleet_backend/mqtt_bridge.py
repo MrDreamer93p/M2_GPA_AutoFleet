@@ -50,6 +50,7 @@ class MqttBridge:
         self._subscribe(client, "perception", qos=1)
         self._subscribe(client, "alert", qos=1)
         self._subscribe(client, "map", qos=1)
+        self._subscribe(client, "sensor", qos=0)
         self._subscribe(client, "coordination", qos=1)
 
     def _on_disconnect(self, *_: Any) -> None:

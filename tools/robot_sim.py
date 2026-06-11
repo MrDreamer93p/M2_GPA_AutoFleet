@@ -168,7 +168,7 @@ class Simulator:
                 latency_jitter = 8.0 * abs(math.sin(phase * 0.55)) + random.uniform(0.0, 5.0)
                 latency_ms = robot.latency_base_ms + latency_jitter
                 packet_loss_pct = min(12.0, robot.loss_base_pct + random.uniform(0.0, 1.6))
-                throughput_kbps = max(60.0, 1400.0 - latency_ms * 9.0 + random.uniform(-100.0, 120.0))
+                throughput_kb_s = max(8.0, (1400.0 - latency_ms * 9.0 + random.uniform(-100.0, 120.0)) / 8.192)
                 rssi_dbm = robot.rssi_base_dbm - latency_jitter * 0.18 + random.uniform(-1.5, 1.5)
 
                 payload = {
@@ -190,7 +190,7 @@ class Simulator:
                     "network": {
                         "latency_ms": round(latency_ms, 2),
                         "packet_loss_pct": round(packet_loss_pct, 2),
-                        "throughput_kbps": round(throughput_kbps, 1),
+                        "throughput_kb_s": round(throughput_kb_s, 1),
                         "rssi_dbm": round(rssi_dbm, 1),
                     },
                 }

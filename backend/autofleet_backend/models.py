@@ -19,6 +19,7 @@ class Pose(BaseModel):
 class NetworkMetrics(BaseModel):
     latency_ms: float | None = None
     packet_loss_pct: float | None = None
+    throughput_kb_s: float | None = None
     throughput_kbps: float | None = None
     rssi_dbm: float | None = None
 
@@ -59,6 +60,33 @@ class ObstacleSummary(BaseModel):
     risk_level: RiskLevel = "NONE"
 
 
+class SensorReading(BaseModel):
+    sensor_id: str
+    sensor_type: Literal["camera", "depth_camera", "kinect", "lidar", "imu", "ultrasonic", "encoder"] | str
+    status: Literal["online", "degraded", "offline"] | str = "offline"
+    ts: int
+    frame_id: str | None = None
+    rate_hz: float | None = None
+    latency_ms: float | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    note: str | None = None
+
+
+class SensorSummary(BaseModel):
+    v: int = 1
+    schema: str = "autofleet.sensor.v1"
+    robot_id: str
+    ts: int
+    sensors: list[SensorReading] = Field(default_factory=list)
+    fusion_status: Literal["online", "degraded", "offline"] | str = "offline"
+    nearest_obstacle_m: float | None = None
+    imu_yaw_rate_rad_s: float | None = None
+    lidar_points: int | None = None
+    depth_frame_url: str | None = None
+    note: str | None = None
+
+
 class Telemetry(BaseModel):
     v: int = 1
     schema: str = "autofleet.telemetry.v1"
@@ -75,6 +103,7 @@ class Telemetry(BaseModel):
     network: NetworkMetrics | None = None
     obstacle_summary: ObstacleSummary | None = None
     map_summary: MapSummary | None = None
+    sensor_summary: SensorSummary | None = None
     raw: dict[str, Any] | None = None
 
 
@@ -142,6 +171,7 @@ class VideoStreamStatus(BaseModel):
     status: Literal["online", "degraded", "offline"] | str = "offline"
     codec: str | None = None
     fps: float | None = None
+    bitrate_kb_s: float | None = None
     bitrate_kbps: float | None = None
     width: int | None = None
     height: int | None = None

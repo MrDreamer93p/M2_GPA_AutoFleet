@@ -34,6 +34,18 @@ function fmtNum(value, digits = 2) {
   return Number(value).toFixed(digits);
 }
 
+function kbpsToKbS(kbps) {
+  const n = Number(kbps);
+  return Number.isFinite(n) ? n / 8.192 : Number.NaN;
+}
+
+function formatRateKbS(value, digits = 1) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "-";
+  if (Math.abs(n) >= 1024) return `${(n / 1024).toFixed(digits)} MB/s`;
+  return `${n.toFixed(digits)} KB/s`;
+}
+
 async function api(path) {
   let lastError = null;
   for (const base of Array.from(new Set([apiBase, ...defaultApiBases]))) {
@@ -71,6 +83,9 @@ function renderStreams(robots, streams) {
       const robot = robotsById[stream.robot_id] || {};
       const pose = robot.pose || {};
       const network = robot.network || {};
+      const throughput = Number.isFinite(Number(network.throughput_kb_s))
+        ? Number(network.throughput_kb_s)
+        : kbpsToKbS(network.throughput_kbps);
       return `
         <article class="sim-card">
           <div class="sim-card-head">
@@ -85,7 +100,7 @@ function renderStreams(robots, streams) {
             <dt>state</dt><dd>${escapeHtml(robot.state || "-")}</dd>
             <dt>battery</dt><dd>${escapeHtml(fmtNum(robot.battery, 3))}</dd>
             <dt>pose</dt><dd>${escapeHtml(`${fmtNum(pose.x, 2)}, ${fmtNum(pose.y, 2)}, ${fmtNum(pose.yaw, 2)}`)}</dd>
-            <dt>network</dt><dd>${escapeHtml(`lat ${fmtNum(network.latency_ms, 1)} ms | loss ${fmtNum(network.packet_loss_pct, 1)} % | tp ${fmtNum(network.throughput_kbps, 0)} kbps`)}</dd>
+            <dt>network</dt><dd>${escapeHtml(`lat ${fmtNum(network.latency_ms, 1)} ms | loss ${fmtNum(network.packet_loss_pct, 1)} % | tp ${formatRateKbS(throughput)}`)}</dd>
           </dl>
         </article>
       `;

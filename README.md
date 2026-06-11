@@ -30,6 +30,7 @@ Topic families under `fleet/v1`:
 - `fleet/v1/perception/{robot_id}`
 - `fleet/v1/alert/{robot_id}`
 - `fleet/v1/map/{robot_id}`
+- `fleet/v1/sensor/{robot_id}`
 - `fleet/v1/coordination/{robot_id}`
 - `fleet/v1/event/{robot_id}`
 - `fleet/v1/mission/{mission_id}`
@@ -201,6 +202,73 @@ python -m http.server 3000 --bind 0.0.0.0
 
 If you updated the frontend while the site container was already running, perform a hard refresh so the new JavaScript is loaded.
 
+### Local Stack With Real WiFi Camera
+
+For a real Raspberry/robot RTSP camera on the same WiFi, the helper script can discover the camera before registering the stream:
+
+```powershell
+.\start_local_stack.ps1 -AutoDiscoverRtsp
+```
+
+Defaults:
+
+- Public host is detected from the active Windows network adapter.
+- The known seed IP `192.168.1.24` is probed first.
+- If the seed is stale, the current `/24` LAN is scanned for `8554` and `554`.
+- Candidate RTSP paths are `camera`, `stream`, `live`, `cam`, and `video`.
+
+You can still force the known address:
+
+```powershell
+.\start_local_stack.ps1 -RtspUrl rtsp://192.168.1.24:8554/camera
+```
+
+Or scan a specific subnet after changing WiFi:
+
+```powershell
+.\start_local_stack.ps1 -AutoDiscoverRtsp -RtspScanSubnet 192.168.1.0/24
+```
+
+If the RTSP endpoint requires authentication, you can let discovery find the host and then inject credentials into the registered URL:
+
+```powershell
+.\start_local_stack.ps1 -AutoDiscoverRtsp -RtspUsername <rtsp-user> -RtspPassword <rtsp-password>
+```
+
+### Raspberry Agent With Auto-Discovery
+
+When the Raspberry Pi and the laptop move between WiFi networks, the board can now auto-discover the laptop MQTT broker and publish its real RTSP source without hand-editing IPs.
+
+Run this on the Raspberry Pi from the repository root:
+
+```bash
+python tools/raspi_autofleet_agent.py --robot-id R1 --mqtt-host auto --rtsp-url auto
+```
+
+Defaults:
+
+- The agent probes the current `/24` subnet for MQTT on `3889` first, then `1883`.
+- It probes the local board for RTSP on `8554` and `554` using the same path list as the PC helper.
+- It publishes telemetry, heartbeats, and command ACKs on `fleet/v1/...`.
+- It refreshes its own IP, the RTSP URL, and the MQTT target while running, so network switches recover automatically.
+
+If the board RTSP stream needs credentials:
+
+```bash
+python tools/raspi_autofleet_agent.py --robot-id R1 --rtsp-username <rtsp-user> --rtsp-password <rtsp-password>
+```
+
+### Real R1 Raspberry Pi Stack
+
+For the current Raspberry Pi based R1 setup, start the laptop control plane, video worker, frontend, direct LAN MQTT path, and Pi systemd services with:
+
+```powershell
+$env:AUTOFLEET_PI_PASSWORD="<pi-password>"
+.\start_real_r1_stack.ps1 -PiHost 192.168.110.249 -LocalMqttHost 192.168.110.131
+```
+
+The script writes `/etc/default/autofleet-agent` on the Pi so the agent connects directly to the laptop MQTT broker. Use `-UseSshTunnel` only when Windows inbound firewall rules block direct MQTT traffic.
+
 ## Simulation and Replay Startup
 
 ### Mode 1: Default Ground-Level Demo Source
@@ -300,6 +368,7 @@ python tools/robot_sim.py --host 127.0.0.1 --port 3889 --robots R1,R2,R3 --video
 - `GET /api/v1/video/streams`
 - `GET /api/v1/perception`
 - `GET /api/v1/map/summaries`
+- `GET /api/v1/sensors`
 - `GET /api/v1/coordination`
 - `GET /api/v1/events`
 
@@ -333,4 +402,4 @@ This repository focuses on the communication, supervision, and fleet-control sid
 - alert management
 - communication stabilization primitives
 
-Hardware control, low-level sensor drivers, SLAM, and onboard autonomy remain outside the scope of this repository and should integrate through the MQTT protocol and the published schemas.
+Hardware control, low-level sensor drivers, SLAM, and onboard autonomy remain outside the scope of this repository and should integrate through the MQTT protocol and the published schemas. Kinect/depth camera, LiDAR, IMU, ultrasonic, encoder, and camera health can report through `autofleet.sensor.v1` on `fleet/v1/sensor/{robot_id}`; higher-level fused outputs can continue to publish `autofleet.perception.v1` and `autofleet.map.v1`.

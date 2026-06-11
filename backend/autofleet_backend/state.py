@@ -17,6 +17,7 @@ from .models import (
     MissionState,
     NeighborState,
     PerceptionSummary,
+    SensorSummary,
     Telemetry,
     VideoStreamStatus,
 )
@@ -40,6 +41,7 @@ class RuntimeState:
     latest_perception: dict[str, PerceptionSummary] = field(default_factory=dict)
     latest_video_status: dict[str, VideoStreamStatus] = field(default_factory=dict)
     latest_map_summary: dict[str, MapSummary] = field(default_factory=dict)
+    latest_sensor_summary: dict[str, SensorSummary] = field(default_factory=dict)
     latest_heartbeats: dict[str, Heartbeat] = field(default_factory=dict)
     service_heartbeats: dict[str, Heartbeat] = field(default_factory=dict)
     active_missions: dict[str, MissionState] = field(default_factory=dict)
@@ -67,6 +69,8 @@ class RuntimeState:
         history.append(telemetry)
         if telemetry.map_summary:
             self.latest_map_summary[telemetry.robot_id] = telemetry.map_summary
+        if telemetry.sensor_summary:
+            self.latest_sensor_summary[telemetry.robot_id] = telemetry.sensor_summary
         self._append_event("telemetry", telemetry.model_dump(), robot_id=telemetry.robot_id, mission_id=telemetry.mission_id)
         return telemetry
 
@@ -135,6 +139,12 @@ class RuntimeState:
         self._append_event("map", summary.model_dump(), robot_id=summary.robot_id)
         return summary
 
+    def upsert_sensor_summary(self, payload: dict[str, Any]) -> SensorSummary:
+        summary = SensorSummary.model_validate(payload)
+        self.latest_sensor_summary[summary.robot_id] = summary
+        self._append_event("sensor", summary.model_dump(), robot_id=summary.robot_id)
+        return summary
+
     def upsert_alert(self, payload: dict[str, Any]) -> AlertEvent:
         alert = AlertEvent.model_validate(payload)
         self.alerts_by_id[alert.alert_id] = alert
@@ -177,6 +187,7 @@ class RuntimeState:
         video_status = self.latest_video_status.get(robot_id)
         perception = self.latest_perception.get(robot_id)
         map_summary = self.latest_map_summary.get(robot_id)
+        sensor_summary = self.latest_sensor_summary.get(robot_id)
         return {
             "telemetry": telemetry.model_dump(),
             "latest_ack": self.latest_ack.get(robot_id),
@@ -184,6 +195,7 @@ class RuntimeState:
             "video_status": video_status.model_dump() if video_status else None,
             "perception": perception.model_dump() if perception else None,
             "map_summary": map_summary.model_dump() if map_summary else None,
+            "sensor_summary": sensor_summary.model_dump() if sensor_summary else None,
             "recent_alerts": self.list_alerts(robot_id=robot_id)[:10],
             "telemetry_history": self.get_recent_telemetry(robot_id),
         }
@@ -249,6 +261,7 @@ class RuntimeState:
                     "proxy_url": status.proxy_url if status else None,
                     "snapshot_url": status.snapshot_url if status else None,
                     "fps": status.fps if status else None,
+                    "bitrate_kb_s": status.bitrate_kb_s if status else None,
                     "bitrate_kbps": status.bitrate_kbps if status else None,
                     "codec": status.codec if status else None,
                     "note": status.note if status else None,
@@ -258,6 +271,9 @@ class RuntimeState:
 
     def list_map_summaries(self) -> list[dict[str, Any]]:
         return [x.model_dump() for x in self.latest_map_summary.values()]
+
+    def list_sensor_summaries(self) -> list[dict[str, Any]]:
+        return [x.model_dump() for x in self.latest_sensor_summary.values()]
 
     def coordination_summaries(self) -> list[dict[str, Any]]:
         now = int(time.time())
@@ -334,6 +350,7 @@ class RuntimeState:
             perception = self.latest_perception.get(robot_id)
             video_status = self.latest_video_status.get(robot_id)
             map_summary = self.latest_map_summary.get(robot_id)
+            sensor_summary = self.latest_sensor_summary.get(robot_id)
             recent_alerts = self.list_alerts(active_only=True, robot_id=robot_id)[:3]
             out.append(
                 {
@@ -350,6 +367,7 @@ class RuntimeState:
                     "obstacle_summary": raw.get("obstacle_summary")
                     or (telem.obstacle_summary.model_dump() if telem.obstacle_summary else None),
                     "map_summary": map_summary.model_dump() if map_summary else None,
+                    "sensor_summary": sensor_summary.model_dump() if sensor_summary else raw.get("sensor_summary"),
                     "latest_perception": perception.model_dump() if perception else None,
                     "video_status": video_status.model_dump() if video_status else None,
                     "control_rtt_ms": (self.latest_ack.get(robot_id) or {}).get("rtt_ms"),
