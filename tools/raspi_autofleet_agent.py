@@ -44,6 +44,24 @@ def parse_csv_ints(raw: str) -> list[int]:
     return values
 
 
+def parse_video_streams(raw_streams: str, default_url: str) -> dict[str, str]:
+    raw = str(raw_streams or "").strip()
+    if not raw:
+        return {"color": default_url} if default_url else {}
+    out: dict[str, str] = {}
+    for pair in raw.split(","):
+        if "=" not in pair:
+            continue
+        stream_type, stream_url = pair.split("=", 1)
+        key = stream_type.strip().lower().replace("-", "_")
+        value = stream_url.strip()
+        if key and value:
+            out[key] = value
+    if not out and default_url:
+        return {"color": default_url}
+    return out
+
+
 def run_command(args: list[str], timeout: float = 3.0) -> str:
     try:
         proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
@@ -245,6 +263,7 @@ class RaspberryAgent:
         self.pose_x = 0.0
         self.pose_y = 0.0
         self.pose_yaw = 0.0
+        self.video_streams = parse_video_streams(args.video_streams, "")
         self.mqtt_host = ""
         self.mqtt_port = args.mqtt_port
         self.self_ip = discover_self_ip()
@@ -308,6 +327,8 @@ class RaspberryAgent:
             return
         self.self_ip = discover_self_ip()
         self.rtsp_url, self.rtsp_status = discover_rtsp_url(self.self_ip, self.args)
+        if not self.args.video_streams.strip():
+            self.video_streams = parse_video_streams("", self.rtsp_url)
         self.last_refresh = time.time()
 
     def connect(self) -> None:
@@ -351,6 +372,7 @@ class RaspberryAgent:
             "mission_id": self.mission_id,
             "video_rtsp_url": self.rtsp_url,
             "video_view_profile": self.args.view_profile,
+            "video_streams": self.video_streams if self.video_streams else ({"color": self.rtsp_url} if self.rtsp_url else None),
             "controls": {"linear_x": round(self.linear_x, 3), "angular_z": round(self.angular_z, 3)},
             "motors": {
                 "left_rpm": round(95.0 * self.linear_x + 40.0 * self.angular_z, 2),
@@ -376,6 +398,7 @@ class RaspberryAgent:
                 "battery": round(self.battery, 3),
                 "video_rtsp_url": self.rtsp_url,
                 "video_view_profile": self.args.view_profile,
+                "video_streams": self.video_streams if self.video_streams else ({"color": self.rtsp_url} if self.rtsp_url else None),
                 "self_ip": self.self_ip,
                 "mqtt_host": self.mqtt_host,
                 "rtsp_discovery_status": self.rtsp_status,
@@ -471,6 +494,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rtsp-username", default="", help="Optional RTSP username to inject into the discovered URL.")
     parser.add_argument("--rtsp-password", default="", help="Optional RTSP password to inject into the discovered URL.")
     parser.add_argument("--view-profile", default="front_center", help="Video view profile published to the dashboard.")
+    parser.add_argument(
+        "--video-streams",
+        default="",
+        help="Comma-separated key=url map. Example: color=rtsp://.../rgb,depth=rtsp://.../depth,pose=rtsp://.../pose",
+    )
     parser.add_argument("--state", default="MANUAL", help="Initial robot state.")
     parser.add_argument("--battery", type=float, default=1.0, help="Initial battery value between 0 and 1.")
     parser.add_argument("--interval", type=float, default=1.0, help="Telemetry publish interval in seconds.")

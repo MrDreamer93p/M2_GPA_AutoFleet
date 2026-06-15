@@ -9,11 +9,13 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 import cv2
 import numpy as np
 import paho.mqtt.client as mqtt
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 
 
@@ -154,16 +156,33 @@ class StreamRegistry:
         self._lock = threading.Lock()
         self._robots: dict[str, dict[str, Any]] = {}
 
+    @staticmethod
+    def _normalize_stream_map(value: Any) -> dict[str, str]:
+        if not isinstance(value, dict):
+            return {}
+        out: dict[str, str] = {}
+        for key, stream_url in value.items():
+            key_name = str(key or "").strip()
+            if not key_name:
+                continue
+            resolved = str(stream_url or "").strip()
+            if not resolved:
+                continue
+            out[key_name] = resolved
+        return out
+
     def update_from_telemetry(self, payload: dict[str, Any]) -> None:
         robot_id = str(payload.get("robot_id", "")).strip()
         if not robot_id:
             return
+        stream_map = self._normalize_stream_map(payload.get("video_streams"))
         with self._lock:
             entry = self._robots.setdefault(robot_id, {})
             entry.update(
                 {
                     "robot_id": robot_id,
                     "video_rtsp_url": payload.get("video_rtsp_url"),
+                    "video_streams": stream_map or None,
                     "video_view_profile": payload.get("video_view_profile"),
                     "state": payload.get("state"),
                     "battery": payload.get("battery"),
@@ -193,10 +212,14 @@ class StreamRegistry:
             for robot_id in sorted(self._robots.keys()):
                 entry = self._robots[robot_id]
                 status = dict(entry.get("video_status") or {})
+                stream_map = dict(entry.get("video_streams") or {})
                 out.append(
                     {
                         "robot_id": robot_id,
                         "source_url": entry.get("video_rtsp_url"),
+                        "source_map": stream_map,
+                        "available_streams": list(stream_map.keys()),
+                        "video_streams": stream_map,
                         "state": entry.get("state"),
                         "view_profile": entry.get("video_view_profile"),
                         "status": status.get("status", "offline"),
@@ -216,14 +239,44 @@ class FrameProvider:
         self.registry = registry
         self._lock = threading.Lock()
         self._captures: dict[str, tuple[str, str, cv2.VideoCapture]] = {}
-        self._latest: dict[str, tuple[np.ndarray, str, str, float, str | None, str | None]] = {}
+        self._latest: dict[str, tuple[np.ndarray, str, str, float, str | None, str | None, str | None]] = {}
 
-    def _release_capture(self, robot_id: str) -> None:
+    @staticmethod
+    def _cache_key(robot_id: str, stream_key: str | None) -> str:
+        normalized = FrameProvider._normalize_stream_key(stream_key) or "default"
+        return f"{robot_id}::{normalized}"
+
+    def _release_capture(self, cache_key: str) -> None:
         with self._lock:
-            existing = self._captures.pop(robot_id, None)
+            existing = self._captures.pop(cache_key, None)
         if existing:
             _, _, cap = existing
             cap.release()
+
+    @staticmethod
+    def _normalize_stream_key(raw: str | None) -> str:
+        return str(raw or "").strip().lower().replace("-", "_")
+
+    @staticmethod
+    def _build_stream_fallbacks() -> list[str]:
+        return ["color", "rgb", "rgb_color", "depth", "ir", "ir2", "pose", "skeleton"]
+
+    def _resolve_requested_stream(self, entry: dict[str, Any], requested_stream: str | None) -> tuple[str | None, str | None]:
+        stream_map = entry.get("video_streams")
+        if isinstance(stream_map, dict) and stream_map:
+            normalized_map: dict[str, str] = {str(k).strip().lower().replace("-", "_"): str(v).strip() for k, v in stream_map.items() if str(v).strip()}
+            requested = self._normalize_stream_key(requested_stream)
+            if requested and requested in normalized_map:
+                return normalized_map[requested], requested
+            for fallback in self._build_stream_fallbacks():
+                if fallback in normalized_map:
+                    return normalized_map[fallback], fallback
+            first_key = sorted(normalized_map.keys())[0]
+            return normalized_map[first_key], first_key
+        legacy = str(entry.get("video_rtsp_url") or "").strip()
+        if legacy:
+            return legacy, "default"
+        return None, None
 
     def _resolve_source(self, source_url: str | None) -> tuple[str, str, str | int] | None:
         raw = str(source_url or "").strip()
@@ -259,41 +312,53 @@ class FrameProvider:
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         return cap
 
-    def _get_capture(self, robot_id: str, source_url: str | None) -> tuple[str, cv2.VideoCapture] | None:
+    def _get_capture(self, cache_key: str, source_url: str | None) -> tuple[str, cv2.VideoCapture] | None:
         resolved = self._resolve_source(source_url)
         if resolved is None:
             return None
         source_key, source_kind, capture_ref = resolved
         with self._lock:
-            existing = self._captures.get(robot_id)
+            existing = self._captures.get(cache_key)
             if existing and existing[0] == source_key and existing[1] == source_kind and existing[2].isOpened():
                 return source_kind, existing[2]
         cap = self._open_capture(source_kind, capture_ref)
         if cap is None:
             return None
         with self._lock:
-            previous = self._captures.pop(robot_id, None)
+            previous = self._captures.pop(cache_key, None)
             if previous:
                 previous[2].release()
-            self._captures[robot_id] = (source_key, source_kind, cap)
+            self._captures[cache_key] = (source_key, source_kind, cap)
         return source_kind, cap
 
-    def _read_frame(self, robot_id: str, source_kind: str, cap: cv2.VideoCapture, source_url: str | None) -> np.ndarray | None:
-        ok, frame = cap.read()
+    def _read_frame(self, cache_key: str, source_kind: str, cap: cv2.VideoCapture, source_url: str | None) -> np.ndarray | None:
+        try:
+            ok, frame = cap.read()
+        except cv2.error:
+            self._release_capture(cache_key)
+            return None
         if ok and frame is not None:
             return frame
         if source_kind == "file":
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            ok, frame = cap.read()
+            try:
+                ok, frame = cap.read()
+            except cv2.error:
+                self._release_capture(cache_key)
+                return None
             if ok and frame is not None:
                 return frame
         if source_kind in {"rtsp", "network"}:
-            self._release_capture(robot_id)
-            reopened = self._get_capture(robot_id, source_url)
+            self._release_capture(cache_key)
+            reopened = self._get_capture(cache_key, source_url)
             if reopened is None:
                 return None
             _, retry_cap = reopened
-            ok, frame = retry_cap.read()
+            try:
+                ok, frame = retry_cap.read()
+            except cv2.error:
+                self._release_capture(cache_key)
+                return None
             if ok and frame is not None:
                 return frame
         return None
@@ -365,32 +430,35 @@ class FrameProvider:
         target_h = max(1, int(h * (max_width / w)))
         return cv2.resize(frame, (max_width, target_h), interpolation=cv2.INTER_AREA)
 
-    def get_frame(self, robot_id: str) -> tuple[np.ndarray, str, str] | None:
+    def get_frame(
+        self, robot_id: str, selected_stream: str | None = None
+    ) -> tuple[np.ndarray, str, str, str | None, str | None, str | None] | None:
         entry = self.registry.get(robot_id)
         if entry is None:
             raise KeyError(robot_id)
-        source_url = str(entry.get("video_rtsp_url") or "").strip()
+        source_url, stream_key = self._resolve_requested_stream(entry, selected_stream)
+        cache_key = self._cache_key(robot_id, stream_key)
         view_profile = str(entry.get("video_view_profile") or "").strip()
-        capture_info = self._get_capture(robot_id, source_url)
+        capture_info = self._get_capture(cache_key, source_url)
         note = ""
         status = "offline"
         frame = None
         if capture_info is not None:
             source_kind, cap = capture_info
-            frame = self._read_frame(robot_id, source_kind, cap, source_url)
+            frame = self._read_frame(cache_key, source_kind, cap, source_url)
             if frame is not None:
                 frame = self._apply_view_profile(frame, view_profile)
                 frame = self._annotate_view(frame, robot_id, view_profile)
                 frame = self._apply_output_profile(frame)
                 status = "online"
                 if view_profile:
-                    note = f"{self._source_label(source_kind)} source ingested successfully ({view_profile})"
+                    note = f"{self._source_label(source_kind)} {stream_key or 'default'} stream ingested successfully ({view_profile})"
                 else:
-                    note = f"{self._source_label(source_kind)} source ingested successfully"
+                    note = f"{self._source_label(source_kind)} {stream_key or 'default'} stream ingested successfully"
             else:
-                self._release_capture(robot_id)
+                self._release_capture(cache_key)
                 status = "degraded"
-                note = f"{self._source_label(source_kind)} source unavailable; no proxy frame published"
+                note = f"{self._source_label(source_kind)} {stream_key or 'default'} stream unavailable; no proxy frame published"
         if frame is None:
             if source_url:
                 status = "degraded"
@@ -399,37 +467,46 @@ class FrameProvider:
                 status = "offline"
                 note = "No upstream video source registered"
             with self._lock:
-                self._latest.pop(robot_id, None)
+                self._latest.pop(cache_key, None)
             return None
-        return frame, status, note
+        return frame, status, note, source_url, view_profile, stream_key
 
-    def update_latest_frame(self, robot_id: str) -> tuple[np.ndarray, str, str] | None:
+    def update_latest_frame(self, robot_id: str, selected_stream: str | None = None) -> tuple[np.ndarray, str, str] | None:
         try:
-            result = self.get_frame(robot_id)
+            result = self.get_frame(robot_id, selected_stream=selected_stream)
         except KeyError:
             return None
         if result is None:
             return None
-        frame, status, note = result
-        entry = self.registry.get(robot_id) or {}
+        frame, status, note, source_url, view_profile, stream_key = result
+        cache_key = self._cache_key(robot_id, stream_key)
         with self._lock:
-            self._latest[robot_id] = (
+            self._latest[cache_key] = (
                 frame,
                 status,
                 note,
                 time.time(),
-                entry.get("video_rtsp_url"),
-                entry.get("video_view_profile"),
+                source_url,
+                view_profile,
+                stream_key,
             )
         return frame, status, note
 
-    def latest_frame(self, robot_id: str) -> tuple[np.ndarray, str, str, float, str | None, str | None] | None:
+    def latest_frame(
+        self, robot_id: str, selected_stream: str | None = None
+    ) -> tuple[np.ndarray, str, str, float, str | None, str | None, str | None] | None:
+        entry = self.registry.get(robot_id)
+        if entry is None:
+            return None
+        _, resolved_stream_key = self._resolve_requested_stream(entry, selected_stream)
+        cache_key = self._cache_key(robot_id, resolved_stream_key)
         with self._lock:
-            cached = self._latest.get(robot_id)
-        if cached is None:
-            self.update_latest_frame(robot_id)
+            cached = self._latest.get(cache_key)
+        selected_stream = self._normalize_stream_key(selected_stream)
+        if cached is None or (selected_stream and cached[6] != selected_stream):
+            self.update_latest_frame(robot_id, selected_stream=selected_stream)
             with self._lock:
-                cached = self._latest.get(robot_id)
+                cached = self._latest.get(cache_key)
         return cached
 
 
@@ -448,13 +525,13 @@ class FfmpegFrameHub:
 
     def stop_all(self) -> None:
         with self._lock:
-            robot_ids = list(self._streams)
-        for robot_id in robot_ids:
-            self.stop(robot_id)
+            stream_ids = list(self._streams)
+        for stream_id in stream_ids:
+            self.stop(stream_id)
 
-    def stop(self, robot_id: str) -> None:
+    def stop(self, stream_id: str) -> None:
         with self._lock:
-            stream = self._streams.pop(robot_id, None)
+            stream = self._streams.pop(stream_id, None)
         if not stream:
             return
         stream["stop"].set()
@@ -466,17 +543,17 @@ class FfmpegFrameHub:
             except subprocess.TimeoutExpired:
                 proc.kill()
 
-    def ensure(self, robot_id: str, source_url: str) -> None:
+    def ensure(self, stream_id: str, source_url: str) -> None:
         source_url = str(source_url or "").strip()
         if not source_url.lower().startswith("rtsp://"):
             return
         with self._lock:
-            existing = self._streams.get(robot_id)
+            existing = self._streams.get(stream_id)
             if existing and existing.get("source_url") == source_url:
                 proc = existing.get("proc")
                 if proc is not None and proc.poll() is None:
                     return
-        self.stop(robot_id)
+        self.stop(stream_id)
         stop_flag = threading.Event()
         stream = {
             "source_url": source_url,
@@ -489,14 +566,14 @@ class FfmpegFrameHub:
             "proc": None,
         }
         with self._lock:
-            self._streams[robot_id] = stream
-        thread = threading.Thread(target=self._run, args=(robot_id, stream), daemon=True, name=f"ffmpeg-hub-{robot_id}")
+            self._streams[stream_id] = stream
+        thread = threading.Thread(target=self._run, args=(stream_id, stream), daemon=True, name=f"ffmpeg-hub-{stream_id}")
         stream["thread"] = thread
         thread.start()
 
-    def latest(self, robot_id: str) -> dict[str, Any] | None:
+    def latest(self, stream_id: str) -> dict[str, Any] | None:
         with self._lock:
-            stream = self._streams.get(robot_id)
+            stream = self._streams.get(stream_id)
             if not stream:
                 return None
             return {
@@ -508,7 +585,7 @@ class FfmpegFrameHub:
                 "note": stream.get("note", ""),
             }
 
-    def _run(self, robot_id: str, stream: dict[str, Any]) -> None:
+    def _run(self, stream_id: str, stream: dict[str, Any]) -> None:
         ffmpeg = find_ffmpeg()
         if ffmpeg is None:
             with self._lock:
@@ -623,6 +700,13 @@ def publish_service_heartbeat() -> None:
     mqtt_client.publish(f"{TOPIC_PREFIX}/heartbeat/video-worker", json.dumps(payload), qos=0)
 
 
+def snapshot_name_for(robot_id: str, source_url_key: str | None = None) -> str:
+    stream_key = FrameProvider._normalize_stream_key(source_url_key)
+    raw = f"{robot_id}__{stream_key}" if stream_key and stream_key != "default" else robot_id
+    safe = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in raw)
+    return f"{safe}.jpg"
+
+
 def publish_video_status(
     robot_id: str,
     status: str,
@@ -630,9 +714,12 @@ def publish_video_status(
     frame: np.ndarray,
     source_url: str | None,
     view_profile: str | None,
+    source_url_key: str | None = None,
+    available_streams: list[str] | None = None,
+    source_map: dict[str, str] | None = None,
 ) -> None:
     h, w = frame.shape[:2]
-    snapshot_name = f"{robot_id}.jpg"
+    snapshot_name = snapshot_name_for(robot_id, source_url_key)
     snapshot_path = SNAPSHOT_DIR / snapshot_name
     settings = video_settings.current()
     jpeg_quality = int(settings.get("jpeg_quality") or MJPEG_JPEG_QUALITY)
@@ -645,6 +732,9 @@ def publish_video_status(
         "robot_id": robot_id,
         "ts": int(time.time()),
         "source_url": source_url,
+        "source_url_key": source_url_key,
+        "available_streams": available_streams,
+        "source_map": source_map,
         "proxy_url": f"{VIDEO_PUBLIC_BASE}/streams/{robot_id}.mjpeg",
         "snapshot_url": f"{VIDEO_PUBLIC_BASE}/snapshots/{snapshot_name}",
         "view_profile": view_profile,
@@ -655,7 +745,7 @@ def publish_video_status(
         "bitrate_kbps": round(bitrate_kb_s * 8192 / 1000, 1),
         "width": int(w),
         "height": int(h),
-        "note": f"{note}; quality={settings.get('preset')}",
+        "note": f"{note}; stream={source_url_key or 'default'}; quality={settings.get('preset')}",
     }
     registry.update_status(robot_id, payload)
     mqtt_client.publish(f"{TOPIC_PREFIX}/video_status/{robot_id}", json.dumps(payload), qos=0)
@@ -667,8 +757,11 @@ def publish_video_unavailable(
     note: str,
     source_url: str | None,
     view_profile: str | None,
+    source_url_key: str | None = None,
+    available_streams: list[str] | None = None,
+    source_map: dict[str, str] | None = None,
 ) -> None:
-    snapshot_path = SNAPSHOT_DIR / f"{robot_id}.jpg"
+    snapshot_path = SNAPSHOT_DIR / snapshot_name_for(robot_id, source_url_key)
     try:
         snapshot_path.unlink(missing_ok=True)
     except OSError:
@@ -679,6 +772,9 @@ def publish_video_unavailable(
         "robot_id": robot_id,
         "ts": int(time.time()),
         "source_url": source_url,
+        "source_url_key": source_url_key,
+        "available_streams": available_streams,
+        "source_map": source_map,
         "proxy_url": None,
         "snapshot_url": None,
         "view_profile": view_profile,
@@ -701,11 +797,14 @@ def publisher_loop() -> None:
         publish_service_heartbeat()
         for robot_id in registry.robot_ids():
             entry = registry.get(robot_id) or {}
-            source_url = str(entry.get("video_rtsp_url") or "").strip()
+            source_url, source_key = provider._resolve_requested_stream(entry, None)
             view_profile = entry.get("video_view_profile")
-            if bool(video_settings.current().get("direct_mjpeg")) and source_url.lower().startswith("rtsp://"):
-                ffmpeg_hub.ensure(robot_id, source_url)
-                latest = ffmpeg_hub.latest(robot_id)
+            stream_map = entry.get("video_streams") if isinstance(entry.get("video_streams"), dict) else {}
+            available_streams = list(stream_map.keys()) if isinstance(stream_map, dict) else []
+            stream_cache_key = provider._cache_key(robot_id, source_key)
+            if source_url and bool(video_settings.current().get("direct_mjpeg")) and source_url.lower().startswith("rtsp://"):
+                ffmpeg_hub.ensure(stream_cache_key, source_url)
+                latest = ffmpeg_hub.latest(stream_cache_key)
                 if latest and latest.get("latest_frame") is not None:
                     frame = latest["latest_frame"]
                     publish_video_status(
@@ -715,6 +814,9 @@ def publisher_loop() -> None:
                         frame,
                         source_url,
                         view_profile,
+                        source_url_key=source_key,
+                        available_streams=available_streams,
+                        source_map=stream_map,
                     )
                     continue
                 publish_video_unavailable(
@@ -723,9 +825,12 @@ def publisher_loop() -> None:
                     str((latest or {}).get("note") or "FFmpeg RTSP stream has not produced real frames yet"),
                     source_url,
                     view_profile,
+                    source_url_key=source_key,
+                    available_streams=available_streams,
+                    source_map=stream_map,
                 )
                 continue
-            latest = provider.latest_frame(robot_id)
+            latest = provider.latest_frame(robot_id, selected_stream=source_key)
             if latest is None:
                 publish_video_unavailable(
                     robot_id,
@@ -733,21 +838,37 @@ def publisher_loop() -> None:
                     "Upstream video source is not reachable; waiting for real frames" if source_url else "No upstream video source registered",
                     source_url,
                     view_profile,
+                    source_url_key=source_key,
+                    available_streams=available_streams,
+                    source_map=stream_map,
                 )
                 continue
-            frame, status, note, _, source_url, view_profile = latest
-            publish_video_status(robot_id, status, note, frame, source_url, view_profile)
+            frame, status, note, _, source_url, source_profile, frame_source_key = latest
+            publish_video_status(
+                robot_id,
+                status,
+                note,
+                frame,
+                source_url,
+                source_profile,
+                source_url_key=frame_source_key,
+                available_streams=available_streams,
+                source_map=stream_map,
+            )
 
 
 def capture_loop() -> None:
     while not stop_event.wait(max(0.015, int(video_settings.current().get("capture_interval_ms") or CAPTURE_INTERVAL_MS) / 1000)):
         for robot_id in registry.robot_ids():
             entry = registry.get(robot_id) or {}
-            source_url = str(entry.get("video_rtsp_url") or "").strip()
-            if bool(video_settings.current().get("direct_mjpeg")) and source_url.lower().startswith("rtsp://"):
-                ffmpeg_hub.ensure(robot_id, source_url)
+            source_url, source_key = provider._resolve_requested_stream(entry, None)
+            if source_url and bool(video_settings.current().get("direct_mjpeg")) and source_url.lower().startswith("rtsp://"):
+                ffmpeg_hub.ensure(provider._cache_key(robot_id, source_key), source_url)
                 continue
-            provider.update_latest_frame(robot_id)
+            try:
+                provider.update_latest_frame(robot_id, selected_stream=source_key)
+            except cv2.error:
+                provider._release_capture(provider._cache_key(robot_id, source_key))
 
 
 def on_connect(client: mqtt.Client, *_: Any) -> None:
@@ -810,12 +931,12 @@ def snapshot(name: str) -> FileResponse:
     return FileResponse(target, media_type="image/jpeg")
 
 
-def mjpeg_generator(robot_id: str):
+def mjpeg_generator(robot_id: str, selected_stream: str | None = None):
     while True:
         settings = video_settings.current()
         interval_s = max(0.02, int(settings.get("mjpeg_interval_ms") or MJPEG_INTERVAL_MS) / 1000)
         jpeg_quality = int(settings.get("jpeg_quality") or MJPEG_JPEG_QUALITY)
-        latest = provider.latest_frame(robot_id)
+        latest = provider.latest_frame(robot_id, selected_stream=selected_stream)
         if latest is None:
             time.sleep(interval_s)
             continue
@@ -835,12 +956,12 @@ def mjpeg_generator(robot_id: str):
         time.sleep(interval_s)
 
 
-def ffmpeg_hub_mjpeg_generator(robot_id: str, source_url: str):
-    ffmpeg_hub.ensure(robot_id, source_url)
+def ffmpeg_hub_mjpeg_generator(stream_id: str, source_url: str):
+    ffmpeg_hub.ensure(stream_id, source_url)
     last_ts = 0.0
     while True:
         interval_s = max(0.02, int(video_settings.current().get("mjpeg_interval_ms") or MJPEG_INTERVAL_MS) / 1000)
-        latest = ffmpeg_hub.latest(robot_id)
+        latest = ffmpeg_hub.latest(stream_id)
         if not latest or latest.get("latest_jpeg") is None:
             time.sleep(interval_s)
             continue
@@ -858,20 +979,49 @@ def ffmpeg_hub_mjpeg_generator(robot_id: str, source_url: str):
         )
 
 
+def upstream_mjpeg_generator(source_url: str):
+    request = Request(source_url, method="GET", headers={"Accept": "multipart/x-mixed-replace"})
+    while True:
+        try:
+            with urlopen(request, timeout=8) as response:
+                while True:
+                    chunk = response.read(64 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+        except (HTTPError, URLError, TimeoutError, OSError):
+            time.sleep(0.5)
+
+
 @app.get("/streams/{robot_id}.mjpeg")
-def stream(robot_id: str) -> StreamingResponse:
+def stream(robot_id: str, stream: str | None = Query(default=None)) -> StreamingResponse:
     entry = registry.get(robot_id)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Robot {robot_id} not found")
-    source_url = str(entry.get("video_rtsp_url") or "").strip()
-    if bool(video_settings.current().get("direct_mjpeg")) and source_url.lower().startswith("rtsp://") and find_ffmpeg() is not None:
+    selected_stream = provider._normalize_stream_key(stream)
+    source_url, source_key = provider._resolve_requested_stream(entry, selected_stream)
+    if not source_url:
+        raise HTTPException(status_code=404, detail=f"Robot {robot_id} has no registered stream")
+    stream_cache_key = provider._cache_key(robot_id, source_key)
+    if source_url.lower().startswith(("http://", "https://")) and ".mjpeg" in source_url.lower():
         return StreamingResponse(
-            ffmpeg_hub_mjpeg_generator(robot_id, source_url),
+            upstream_mjpeg_generator(source_url),
+            media_type="multipart/x-mixed-replace; boundary=frame",
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"},
+        )
+    if (
+        source_url
+        and bool(video_settings.current().get("direct_mjpeg"))
+        and source_url.lower().startswith("rtsp://")
+        and find_ffmpeg() is not None
+    ):
+        return StreamingResponse(
+            ffmpeg_hub_mjpeg_generator(stream_cache_key, source_url),
             media_type="multipart/x-mixed-replace; boundary=frame",
             headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"},
         )
     return StreamingResponse(
-        mjpeg_generator(robot_id),
+        mjpeg_generator(robot_id, selected_stream=source_key),
         media_type="multipart/x-mixed-replace; boundary=frame",
         headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"},
     )

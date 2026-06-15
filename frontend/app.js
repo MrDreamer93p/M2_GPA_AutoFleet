@@ -1,20 +1,17 @@
 const defaultHost = window.location.hostname || "127.0.0.1";
 const defaultProto = window.location.protocol === "https:" ? "https:" : "http:";
-const defaultApiBases = [
-  `${defaultProto}//${defaultHost}:8201/api/v1`,
-  `${defaultProto}//${defaultHost}:8200/api/v1`,
-  `${defaultProto}//${defaultHost}:8000/api/v1`,
-  `${defaultProto}//${defaultHost}:8001/api/v1`,
-];
-const transientApiBases = [];
-const savedApiBase = (localStorage.getItem("autofleet_api_base") || "").replace(/\/+$/, "");
-const hasPinnedApiBase =
-  Boolean(savedApiBase) && !defaultApiBases.includes(savedApiBase) && !transientApiBases.includes(savedApiBase);
-let apiBase = hasPinnedApiBase ? savedApiBase : defaultApiBases[0];
+const defaultApiHosts = Array.from(new Set([defaultHost, "127.0.0.1", "localhost"].filter(Boolean)));
+const defaultApiPorts = [8200, 8201, 8000, 8001];
+const defaultApiBases = defaultApiHosts.flatMap((host) => defaultApiPorts.map((port) => `${defaultProto}//${host}:${port}/api/v1`));
+let apiBase = `${defaultProto}//${defaultHost}:8200/api/v1`;
+let apiBasePinned = false;
+let availableApiBases = [];
 
 const output = document.getElementById("output");
 const robotTable = document.getElementById("robotTable");
 const videoWall = document.getElementById("videoWall");
+const kinectStage = document.getElementById("kinectStage");
+const kinectStatus = document.getElementById("kinectStatus");
 const fleetOverview = document.getElementById("fleetOverview");
 const riskMap = document.getElementById("riskMap");
 const mapSummaryGrid = document.getElementById("mapSummaryGrid");
@@ -24,6 +21,10 @@ const protocolOutput = document.getElementById("protocolOutput");
 const formationStatus = document.getElementById("formationStatus");
 const teleopStatus = document.getElementById("teleopStatus");
 const apiBaseInput = document.getElementById("apiBase");
+const apiBaseCustomInput = document.getElementById("apiBaseCustom");
+const applyApiBaseBtn = document.getElementById("applyApiBaseBtn");
+const detectApiBtn = document.getElementById("detectApiBtn");
+const apiEndpointStatus = document.getElementById("apiEndpointStatus");
 const autoRefreshToggle = document.getElementById("autoRefreshToggle");
 
 const networkChart = document.getElementById("networkChart");
@@ -35,6 +36,8 @@ const applyVideoQualityBtn = document.getElementById("applyVideoQualityBtn");
 const videoQualityStatus = document.getElementById("videoQualityStatus");
 const MAX_NETWORK_POINTS = 120;
 const MAX_DIAG_POINTS = 240;
+const PREFERRED_KINECT_STREAM_KEYS = ["color", "rgb", "rgb_color", "depth", "distance", "infrared", "ir", "body_index", "skeleton", "body", "pose", "ir2", "default"];
+const PREFERRED_VEHICLE_STREAM_KEYS = ["color", "rgb", "rgb_color", "default", "front", "camera", "depth", "pose"];
 
 const viewControlBtn = document.getElementById("viewControlBtn");
 const viewDiagnosticsBtn = document.getElementById("viewDiagnosticsBtn");
@@ -54,11 +57,10 @@ const teleopRobotIdInput = document.getElementById("teleopRobotId");
 const leaderRobotIdInput = document.getElementById("leaderRobotId");
 const followerRobotIdsInput = document.getElementById("followerRobotIds");
 
-apiBaseInput.value = apiBase;
-
 let robotsCache = [];
 let alertsCache = [];
 let healthCache = null;
+let kinectBridgeHealthCache = null;
 let protocolSpecCache = null;
 let eventsCache = [];
 let refreshTimer = null;
@@ -72,7 +74,11 @@ let diagTimer = null;
 let diagTickInFlight = false;
 let stressTimer = null;
 let videoWallRenderKey = "";
+let kinectStageRenderKey = "";
 let videoSettingsCache = null;
+let selectedStreamsByRobot = {};
+let selectedKinectRobotId = localStorage.getItem("autofleet_kinect_robot") || "";
+let selectedKinectStream = localStorage.getItem("autofleet_kinect_stream") || "";
 const stressState = {
   running: false,
   startedAt: 0,
@@ -82,6 +88,121 @@ const stressState = {
   samples: [],
   lastError: null,
 };
+
+function isDefaultApiBase(value) {
+  const normalized = (value || "").replace(/\/+$/, "");
+  return defaultApiBases.includes(normalized);
+}
+
+function getStoredApiBase() {
+  return (localStorage.getItem("autofleet_api_base") || "").replace(/\/+$/, "");
+}
+
+function normalizeApiBaseInput(value) {
+  let raw = String(value || "").trim();
+  if (!raw) return "";
+  if (!/^https?:\/\//i.test(raw)) {
+    raw = `${defaultProto}//${raw}`;
+  }
+  try {
+    const url = new URL(raw);
+    url.pathname = url.pathname.replace(/\/+$/, "");
+    if (!url.pathname || url.pathname === "/") {
+      url.pathname = "/api/v1";
+    } else if (!url.pathname.endsWith("/api/v1")) {
+      url.pathname = `${url.pathname}/api/v1`.replace(/\/+/g, "/");
+    }
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return raw.replace(/\/+$/, "");
+  }
+}
+
+function syncApiBaseInputs(nextValue) {
+  if (apiBaseInput) apiBaseInput.value = nextValue;
+  if (apiBaseCustomInput) apiBaseCustomInput.value = nextValue;
+}
+
+function describeApiBase(base) {
+  try {
+    const url = new URL(base);
+    const port = url.port || (url.protocol === "https:" ? "443" : "80");
+    const kind = port === "8201" || port === "8200" ? "Local Backend" : "Legacy Backend";
+    return `${kind} (${url.hostname}:${port})`;
+  } catch {
+    return base;
+  }
+}
+
+function apiRouteKey(base) {
+  try {
+    const url = new URL(base);
+    const port = url.port || (url.protocol === "https:" ? "443" : "80");
+    return `${url.protocol}//:${port}${url.pathname.replace(/\/+$/, "")}`;
+  } catch {
+    return String(base || "").replace(/\/+$/, "");
+  }
+}
+
+function apiHostScore(base) {
+  try {
+    const host = new URL(base).hostname.toLowerCase();
+    if (host === defaultHost.toLowerCase()) return 0;
+    if (host === "localhost") return 1;
+    if (host === "127.0.0.1") return 2;
+    return 3;
+  } catch {
+    return 9;
+  }
+}
+
+function setEndpointStatus(text, state = "idle") {
+  if (!apiEndpointStatus) return;
+  apiEndpointStatus.textContent = text;
+  apiEndpointStatus.dataset.state = state;
+}
+
+function populateApiBasePresets() {
+  if (!apiBaseInput) return;
+  while (apiBaseInput.firstChild) {
+    apiBaseInput.removeChild(apiBaseInput.firstChild);
+  }
+
+  const bases = uniqueApiBasesByRoute([apiBase, normalizeApiBaseInput(getStoredApiBase()), ...availableApiBases, ...defaultApiBases]);
+  if (!bases.length) {
+    bases.push(defaultApiBases[0]);
+  }
+  for (const base of bases) {
+    const opt = document.createElement("option");
+    opt.value = base;
+    opt.textContent = availableApiBases.includes(base) ? `Online | ${describeApiBase(base)}` : `Candidate | ${describeApiBase(base)}`;
+    apiBaseInput.appendChild(opt);
+  }
+
+  if (!bases.includes(apiBase) && bases.length) {
+    apiBase = bases[0];
+  }
+  syncApiBaseInputs(apiBase);
+}
+
+function initApiBase() {
+  const saved = normalizeApiBaseInput(getStoredApiBase());
+  if (isDefaultApiBase(saved)) {
+    apiBase = defaultApiBases[0];
+    localStorage.setItem("autofleet_api_base", apiBase);
+    apiBasePinned = false;
+  } else if (saved) {
+    apiBase = saved;
+    apiBasePinned = true;
+  } else {
+    apiBase = defaultApiBases[0];
+    apiBasePinned = false;
+  }
+  populateApiBasePresets();
+  syncApiBaseInputs(apiBase);
+}
 
 function print(obj) {
   output.textContent = JSON.stringify(obj, null, 2);
@@ -128,6 +249,240 @@ function percentile(values, p) {
   if (!arr.length) return Number.NaN;
   const idx = Math.max(0, Math.min(arr.length - 1, Math.floor((arr.length - 1) * p)));
   return arr[idx];
+}
+
+function normalizeStreamKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s\-]+/g, "_");
+}
+
+function streamDisplayName(streamKey) {
+  const key = normalizeStreamKey(streamKey);
+  if (key === "rgb") return "Color (RGB)";
+  if (key === "rgb_color") return "Color";
+  if (key === "body") return "Body";
+  if (key === "body_index") return "Body Index";
+  if (key === "ir2") return "IR2";
+  if (key === "infrared") return "Infrared";
+  if (key === "kinect") return "Kinect Depth";
+  if (key === "distance") return "Distance";
+  if (key === "pose") return "Pose / Skeleton";
+  if (key === "skeleton") return "Skeleton";
+  if (key === "depth") return "Depth";
+  if (key === "default") return "Default";
+  return key || "Stream";
+}
+
+function getRobotStreamMap(robot) {
+  const status = robot.video_status || {};
+  const statusMap = status.source_map;
+  const telemetryMap = robot.video_streams;
+  const rawMap =
+    statusMap && typeof statusMap === "object"
+      ? { ...statusMap }
+      : telemetryMap && typeof telemetryMap === "object"
+      ? { ...telemetryMap }
+      : {};
+  const normalized = {};
+  for (const [rawKey, url] of Object.entries(rawMap)) {
+    const key = normalizeStreamKey(rawKey);
+    if (!key || !url) continue;
+    if (!(key in normalized)) normalized[key] = String(url);
+  }
+  if (!Object.keys(normalized).length) {
+    const fallback = status.source_url || robot.video_rtsp_url;
+    if (fallback) normalized.default = String(fallback);
+  }
+  return normalized;
+}
+
+function getRobotAvailableStreams(robot) {
+  const status = robot.video_status || {};
+  const statusList = Array.isArray(status.available_streams) ? status.available_streams : [];
+  const streamMap = getRobotStreamMap(robot);
+  const seen = new Set();
+  const keys = [];
+  for (const stream of statusList) {
+    const key = normalizeStreamKey(stream);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    keys.push(key);
+  }
+  for (const rawKey of Object.keys(streamMap)) {
+    const key = normalizeStreamKey(rawKey);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    keys.push(key);
+  }
+  if (!keys.length && (status.source_url || robot.video_rtsp_url)) {
+    keys.push("default");
+  }
+  if (!keys.length) {
+    keys.push("default");
+  }
+  return keys;
+}
+
+function preferredStreamForRobot(robot, preferredKeys = PREFERRED_VEHICLE_STREAM_KEYS) {
+  const available = getRobotAvailableStreams(robot);
+  for (const preferred of preferredKeys) {
+    const normalized = normalizeStreamKey(preferred);
+    if (available.includes(normalized)) return normalized;
+  }
+  return available[0] || "default";
+}
+
+function getRobotSelectedStream(robot, preferredKeys = PREFERRED_VEHICLE_STREAM_KEYS) {
+  const robotId = String(robot.robot_id || "").trim();
+  const available = getRobotAvailableStreams(robot);
+  const configured = normalizeStreamKey(selectedStreamsByRobot[robotId]);
+  const fallback = preferredStreamForRobot(robot, preferredKeys);
+  if (configured && available.includes(configured)) return configured;
+  selectedStreamsByRobot[robotId] = fallback;
+  return fallback;
+}
+
+function streamSelectorHtml(robot, options, className = "video-stream-select") {
+  if (!options.length || options.length <= 1) return "";
+  const selected = className === "kinect-stream-select"
+    ? getKinectSelectedStream(robot)
+    : getRobotSelectedStream(robot, PREFERRED_VEHICLE_STREAM_KEYS);
+  const robotId = escapeHtml(robot.robot_id || "");
+  const optionHtml = options
+    .map((rawKey) => {
+      const key = normalizeStreamKey(rawKey);
+      const isSelected = key === selected ? " selected" : "";
+      return `<option value="${escapeHtml(key)}"${isSelected}>${escapeHtml(streamDisplayName(key))}</option>`;
+    })
+    .join("");
+  return `
+    <label class="stream-switch" data-robot-id="${robotId}">
+      <span>Stream</span>
+      <select class="${escapeHtml(className)}" data-robot-id="${robotId}">
+        ${optionHtml}
+      </select>
+    </label>
+  `;
+}
+
+function robotHasKinectFocusStream(robot) {
+  const robotHint = String(robot.robot_id || "").toLowerCase();
+  const streamList = getRobotAvailableStreams(robot);
+  return /kinect/.test(robotHint) || streamList.some((stream) => /pose|skeleton|body|body_index|depth|ir|infrared/.test(stream));
+}
+
+function isKinectRobot(robot) {
+  const robotId = String(robot.robot_id || "").toLowerCase();
+  const status = robot.video_status || {};
+  const sourceText = [
+    status.source_url,
+    status.proxy_url,
+    status.snapshot_url,
+    robot.video_rtsp_url,
+    ...Object.values(robot.video_streams || {}),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  const sensors = Array.isArray(robot.sensor_summary?.sensors) ? robot.sensor_summary.sensors : [];
+  const hasOnlineKinectSensor = sensors.some(
+    (sensor) => String(sensor.sensor_type || "").toLowerCase() === "kinect" && String(sensor.status || "").toLowerCase() === "online"
+  );
+  return robotId.includes("kinect") || sourceText.includes("kinect") || hasOnlineKinectSensor;
+}
+
+function getKinectSelectedStream(robot) {
+  const robotId = String(robot.robot_id || "").trim();
+  const available = getRobotAvailableStreams(robot);
+  const configured = robotId === selectedKinectRobotId ? normalizeStreamKey(selectedKinectStream) : "";
+  const fallback = preferredStreamForRobot(robot, PREFERRED_KINECT_STREAM_KEYS);
+  const next = configured && available.includes(configured) ? configured : fallback;
+  selectedKinectRobotId = robotId;
+  selectedKinectStream = next;
+  localStorage.setItem("autofleet_kinect_robot", selectedKinectRobotId);
+  localStorage.setItem("autofleet_kinect_stream", selectedKinectStream);
+  return next;
+}
+
+function kinectRobotSelectorHtml(kinectRobots) {
+  if (kinectRobots.length <= 1) return "";
+  const selectedId = selectedKinectRobotId || kinectRobots[0]?.robot_id || "";
+  const options = kinectRobots
+    .map((robot) => {
+      const id = String(robot.robot_id || "");
+      const selected = id === selectedId ? " selected" : "";
+      return `<option value="${escapeHtml(id)}"${selected}>${escapeHtml(id)}</option>`;
+    })
+    .join("");
+  return `
+    <label class="stream-switch">
+      <span>Kinect</span>
+      <select class="kinect-robot-select">
+        ${options}
+      </select>
+    </label>
+  `;
+}
+
+function withStreamQuery(url, streamKey) {
+  if (!url) return "";
+  const normalized = normalizeStreamKey(streamKey);
+  if (!normalized) return url;
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}stream=${encodeURIComponent(normalized)}`;
+}
+
+
+function resolveStreamUrl(rawUrl) {
+  const trimmed = String(rawUrl || "").trim();
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (!trimmed.startsWith("/")) return trimmed;
+  try {
+    const origin = new URL(apiBase).origin;
+    return `${origin}${trimmed}`;
+  } catch {
+    return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  }
+}
+
+function apiRelativeUrl(path) {
+  try {
+    return `${new URL(apiBase).origin}${path}`;
+  } catch {
+    return path;
+  }
+}
+
+function backendVideoStreamUrl(robot, selectedStream) {
+  const robotId = encodeURIComponent(String(robot.robot_id || ""));
+  const streamKey = normalizeStreamKey(selectedStream);
+  const query = streamKey ? `?stream=${encodeURIComponent(streamKey)}` : "";
+  return apiRelativeUrl(`/api/v1/video/proxy/${robotId}.mjpeg${query}`);
+}
+
+function kinectLiveStreamUrl(robot, selectedStream) {
+  const streamKey = normalizeStreamKey(selectedStream);
+  const direct = getRobotStreamMap(robot)[streamKey] || robot.video_rtsp_url || "";
+  if (/^https?:\/\//i.test(direct)) return direct;
+  return `http://127.0.0.1:8450/streams/${encodeURIComponent(streamKey || "color")}.mjpeg`;
+}
+
+function backendSnapshotUrl(snapshotUrl) {
+  const raw = String(snapshotUrl || "").trim();
+  if (!raw) return "";
+  let name = "";
+  try {
+    const parsed = new URL(raw, window.location.href);
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    name = parts[parts.length - 1] || "";
+  } catch {
+    const parts = raw.split("?")[0].split("/").filter(Boolean);
+    name = parts[parts.length - 1] || "";
+  }
+  return name ? apiRelativeUrl(`/api/v1/video/snapshots/${encodeURIComponent(name)}`) : resolveStreamUrl(raw);
 }
 
 function computeJitter(values) {
@@ -184,24 +539,95 @@ function highestRobotRisk(robot) {
   return alertSeverity || robot.latest_perception?.risk_level || robot.map_summary?.risk_level || robot.coordination?.collision_risk || "NONE";
 }
 
-function setApiBase(nextValue) {
-  apiBase = nextValue.replace(/\/+$/, "");
+function setApiBase(nextValue, { pinned = true } = {}) {
+  apiBase = normalizeApiBaseInput(nextValue);
+  apiBasePinned = pinned;
   localStorage.setItem("autofleet_api_base", apiBase);
+  populateApiBasePresets();
+  syncApiBaseInputs(apiBase);
 }
 
 function uniqueApiBases(values) {
   return Array.from(new Set(values.map((value) => String(value || "").replace(/\/+$/, "")).filter(Boolean)));
 }
 
+function uniqueApiBasesByRoute(values) {
+  const best = new Map();
+  for (const value of uniqueApiBases(values)) {
+    const key = apiRouteKey(value);
+    const existing = best.get(key);
+    if (!existing || apiHostScore(value) < apiHostScore(existing)) {
+      best.set(key, value);
+    }
+  }
+  return Array.from(best.values());
+}
+
+async function probeApiBase(candidate) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1600);
+  const started = performance.now();
+  try {
+    const res = await fetch(`${candidate}/health`, {
+      method: "GET",
+      cache: "no-store",
+      signal: controller.signal,
+      headers: { Accept: "application/json" },
+    });
+    const body = await res.json().catch(() => ({}));
+    return {
+      base: candidate,
+      ok: res.ok && body?.status === "ok",
+      latency_ms: Math.round(performance.now() - started),
+      body,
+    };
+  } catch (err) {
+    return { base: candidate, ok: false, error: String(err) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function detectApiEndpoints() {
+  const candidates = uniqueApiBasesByRoute([apiBase, ...defaultApiBases, normalizeApiBaseInput(getStoredApiBase())]);
+  setEndpointStatus(`Detecting ${candidates.length} API endpoints...`, "detecting");
+  populateApiBasePresets();
+
+  const results = await Promise.all(candidates.map((candidate) => probeApiBase(candidate)));
+  const onlineByRoute = new Map();
+  for (const result of results.filter((item) => item.ok)) {
+    const key = apiRouteKey(result.base);
+    const existing = onlineByRoute.get(key);
+    const resultScore = apiHostScore(result.base);
+    const existingScore = existing ? apiHostScore(existing.base) : Number.POSITIVE_INFINITY;
+    if (!existing || resultScore < existingScore || (resultScore === existingScore && result.latency_ms < existing.latency_ms)) {
+      onlineByRoute.set(key, result);
+    }
+  }
+  const online = Array.from(onlineByRoute.values()).sort((a, b) => a.latency_ms - b.latency_ms);
+  availableApiBases = online.map((result) => result.base);
+
+  if (availableApiBases.length) {
+    const saved = getStoredApiBase();
+    const preferred = availableApiBases.includes(saved) ? saved : availableApiBases[0];
+    setApiBase(preferred, { pinned: true });
+    const current = online.find((result) => result.base === preferred);
+    setEndpointStatus(`Using ${describeApiBase(preferred)} | ${current?.latency_ms ?? "-"}ms`, "online");
+    return;
+  }
+
+  populateApiBasePresets();
+  setEndpointStatus("No healthy API detected. Use a candidate or enter a custom endpoint.", "offline");
+}
+
 async function fetchWithApiFallback(path, options = {}) {
-  const candidates = hasPinnedApiBase ? [apiBase] : uniqueApiBases([apiBase, ...defaultApiBases]);
+  const candidates = apiBasePinned ? [apiBase] : uniqueApiBasesByRoute([apiBase, ...availableApiBases, ...defaultApiBases]);
   let lastError = null;
   for (const candidate of candidates) {
     try {
       const res = await fetch(`${candidate}${path}`, options);
       if (candidate !== apiBase) {
-        setApiBase(candidate);
-        apiBaseInput.value = candidate;
+        setApiBase(candidate, { pinned: false });
       }
       return res;
     } catch (err) {
@@ -333,18 +759,115 @@ function renderRobotTable(items) {
   }
 }
 
-function renderVideoWall(items) {
-  if (!items.length) {
-    videoWallRenderKey = "";
-    videoWall.innerHTML = `<div class="video-empty">No connected robots yet. Publish telemetry to see streams.</div>`;
+async function refreshKinectBridgeHealth() {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 900);
+  try {
+    const res = await fetch("http://127.0.0.1:8450/health", {
+      method: "GET",
+      cache: "no-store",
+      signal: controller.signal,
+      headers: { Accept: "application/json" },
+    });
+    kinectBridgeHealthCache = res.ok ? await res.json() : { status: "offline", note: `HTTP ${res.status}` };
+  } catch (err) {
+    kinectBridgeHealthCache = { status: "offline", note: String(err) };
+  } finally {
+    clearTimeout(timeout);
+  }
+  return kinectBridgeHealthCache;
+}
+
+function renderKinectStage(items) {
+  const kinectRobots = items.filter(isKinectRobot);
+  if (!kinectRobots.length) {
+    kinectStageRenderKey = "";
+    if (kinectStatus) kinectStatus.textContent = "Kinect not registered";
+    kinectStage.innerHTML = `
+      <div class="kinect-empty">
+        <strong>No Windows Kinect stream in AutoFleet yet.</strong>
+        <span>Device is detected by Windows, but no Kinect bridge has published color/depth/body streams.</span>
+      </div>
+    `;
     return;
   }
 
-  const nextRenderKey = items
+  let robot = kinectRobots.find((item) => String(item.robot_id || "") === selectedKinectRobotId) || kinectRobots[0];
+  selectedKinectRobotId = String(robot.robot_id || "");
+  const streamChoices = getRobotAvailableStreams(robot);
+  const streamState = robot.video_status?.status || "offline";
+  const bridgeFrames = Number(kinectBridgeHealthCache?.frames || 0);
+  const bridgeSensorAvailable = kinectBridgeHealthCache?.diagnostics?.sensor_available;
+  const bridgeNote = kinectBridgeHealthCache?.note || "";
+  const bridgeState =
+    kinectBridgeHealthCache?.status === "offline"
+      ? "bridge offline"
+      : bridgeSensorAvailable === false
+      ? "sensor unavailable"
+      : bridgeFrames > 0
+      ? `frames ${bridgeFrames}`
+      : "waiting frames";
+  if (kinectStatus) {
+    kinectStatus.textContent = `${selectedKinectRobotId || "Kinect"} | ${streamChoices.length} channels | ${streamState} | ${bridgeState}`;
+  }
+  const selectorHtml = kinectRobotSelectorHtml(kinectRobots);
+  const channelHtml = streamChoices
+    .map((streamKey) => {
+      const normalized = normalizeStreamKey(streamKey);
+      return `
+        <article class="kinect-channel" data-stream="${escapeHtml(normalized)}">
+          <div class="kinect-channel-head">
+            <strong>${escapeHtml(streamDisplayName(normalized))}</strong>
+            <span class="flag-pill ${severityClass(streamState === "online" ? "ok" : "warning")}">${escapeHtml(streamState)}</span>
+          </div>
+          <div class="kinect-channel-view">${buildStreamView(robot, normalized)}</div>
+        </article>
+      `;
+    })
+    .join("");
+  const renderKey = [
+    selectedKinectRobotId,
+    streamState,
+    robot.video_status?.proxy_url || "",
+    robot.video_status?.snapshot_url || "",
+    streamChoices.join(","),
+    bridgeSensorAvailable,
+  ].join("|");
+  if (renderKey === kinectStageRenderKey && kinectStage.querySelector(".kinect-live")) {
+    return;
+  }
+  kinectStageRenderKey = renderKey;
+  kinectStage.innerHTML = `
+    <article class="kinect-live" data-robot-id="${escapeHtml(selectedKinectRobotId)}">
+      <div class="kinect-live-head">
+        <strong>${escapeHtml(selectedKinectRobotId || "Kinect")}</strong>
+        <div class="video-head-actions">${selectorHtml}</div>
+      </div>
+      <div class="kinect-multiview">${channelHtml}</div>
+      <div class="kinect-meta">
+        <span>${escapeHtml(robot.video_status?.note || "Waiting for Kinect frame status.")}</span>
+        <span>${escapeHtml(`bridge: ${bridgeState}${bridgeNote ? ` | ${bridgeNote}` : ""}`)}</span>
+        <span>${escapeHtml(robot.video_status?.proxy_url || robot.video_status?.source_url || robot.video_rtsp_url || "-")}</span>
+      </div>
+    </article>
+  `;
+}
+
+function renderVideoWall(items) {
+  const vehicleItems = items.filter((robot) => !isKinectRobot(robot));
+  if (!vehicleItems.length) {
+    videoWallRenderKey = "";
+    videoWall.innerHTML = `<div class="video-empty">No connected vehicle robots yet. Publish Raspberry Pi telemetry to see vehicle streams.</div>`;
+    return;
+  }
+
+  const nextRenderKey = vehicleItems
     .map((robot) =>
       [
         robot.robot_id,
         robot.state,
+        getRobotSelectedStream(robot, PREFERRED_VEHICLE_STREAM_KEYS),
+        getRobotAvailableStreams(robot).join(","),
         robot.video_status?.status || "offline",
         robot.video_status?.proxy_url || "",
         robot.video_status?.snapshot_url || "",
@@ -357,14 +880,17 @@ function renderVideoWall(items) {
   }
   videoWallRenderKey = nextRenderKey;
 
-  videoWall.innerHTML = items
+  videoWall.innerHTML = vehicleItems
     .map((robot) => {
       const pose = robot.pose || {};
       const controls = robot.controls || {};
       const motors = robot.motors || {};
       const ack = robot.latest_ack || {};
       const sample = getLatestSample(robot.robot_id) || {};
-      const streamHtml = buildStreamView(robot);
+      const selectedStream = getRobotSelectedStream(robot, PREFERRED_VEHICLE_STREAM_KEYS);
+      const streamChoices = getRobotAvailableStreams(robot);
+      const streamHtml = buildStreamView(robot, selectedStream);
+      const streamSwitcher = streamSelectorHtml(robot, streamChoices, "video-stream-select");
       const detections = robot.latest_perception?.detections || [];
       const sensorSummary = formatSensorSummary(robot.sensor_summary);
       const risk = highestRobotRisk(robot);
@@ -380,10 +906,15 @@ function renderVideoWall(items) {
         )
         .join("");
       return `
-      <article class="video-card">
+      <article class="video-card" data-robot-id="${escapeHtml(
+        robot.robot_id
+      )}">
         <div class="video-card-head">
           <strong>${escapeHtml(robot.robot_id)}</strong>
-          <span class="${robot.online ? "online" : "offline"}">${escapeHtml(robot.state ?? "UNKNOWN")}</span>
+          <div class="video-head-actions">
+            <span class="${robot.online ? "online" : "offline"}">${escapeHtml(robot.state ?? "UNKNOWN")}</span>
+            ${streamSwitcher}
+          </div>
         </div>
         <div class="video-view">${streamHtml}</div>
         <div class="video-meta">
@@ -415,16 +946,22 @@ function formatSensorSummary(summary) {
   return `${summary.fusion_status || "offline"}: ${label}`;
 }
 
-function buildStreamView(robot) {
-  const proxyUrl = robot.video_status?.proxy_url || "";
+function buildStreamView(robot, selectedStream) {
+  const proxyUrl = resolveStreamUrl(robot.video_status?.proxy_url || "");
+  const hasRegisteredStream = Boolean(getRobotStreamMap(robot)[normalizeStreamKey(selectedStream)] || robot.video_rtsp_url);
   const snapshotUrl = robot.video_status?.snapshot_url || "";
   const rtspUrl = robot.video_rtsp_url || "";
   const note = robot.video_status?.note || "";
-  if (proxyUrl) {
-    return `<img class="mjpeg-stream" src="${escapeHtml(proxyUrl)}" alt="Live stream for ${escapeHtml(robot.robot_id)}">`;
+  const streamUrl = hasRegisteredStream || proxyUrl ? backendVideoStreamUrl(robot, selectedStream) : "";
+  if (isKinectRobot(robot) && (hasRegisteredStream || proxyUrl || robot.video_rtsp_url)) {
+    const liveUrl = kinectLiveStreamUrl(robot, selectedStream);
+    return `<img class="mjpeg-stream kinect-sdk-stream" src="${escapeHtml(liveUrl)}" alt="Live SDK stream for ${escapeHtml(robot.robot_id)} ${escapeHtml(streamDisplayName(selectedStream))}">`;
+  }
+  if (streamUrl) {
+    return `<img class="mjpeg-stream" src="${escapeHtml(streamUrl)}" alt="Live stream for ${escapeHtml(robot.robot_id)}">`;
   }
   if (snapshotUrl) {
-    return `<img class="snapshot-thumb" src="${escapeHtml(snapshotUrl)}" alt="Snapshot for ${escapeHtml(robot.robot_id)}">`;
+    return `<img class="snapshot-thumb" src="${escapeHtml(backendSnapshotUrl(snapshotUrl))}" alt="Snapshot for ${escapeHtml(robot.robot_id)}">`;
   }
   if (rtspUrl) {
     return `
@@ -1251,6 +1788,7 @@ async function refreshRobots({ quiet = false } = {}) {
     api("/protocol"),
     api("/events?limit=20"),
   ]);
+  await refreshKinectBridgeHealth();
   robotsCache = robotsData.items || [];
   alertsCache = alertsData.items || [];
   healthCache = healthData;
@@ -1258,6 +1796,7 @@ async function refreshRobots({ quiet = false } = {}) {
   eventsCache = eventsData.items || [];
   updateNetworkHistory(robotsCache);
   renderRobotTable(robotsCache);
+  renderKinectStage(robotsCache);
   renderVideoWall(robotsCache);
   renderNetworkSummary(robotsCache);
   renderNetworkLegend(robotsCache);
@@ -1389,6 +1928,34 @@ function stopTeleopLoop() {
   }
 }
 
+videoWall.addEventListener("change", (ev) => {
+  const target = ev.target;
+  if (!(target instanceof HTMLSelectElement)) return;
+  if (!target.classList.contains("video-stream-select")) return;
+  const robotId = target.dataset.robotId || target.closest("[data-robot-id]")?.dataset?.robotId;
+  if (!robotId) return;
+  selectedStreamsByRobot[robotId] = normalizeStreamKey(target.value);
+  renderVideoWall(robotsCache);
+});
+
+kinectStage.addEventListener("change", (ev) => {
+  const target = ev.target;
+  if (!(target instanceof HTMLSelectElement)) return;
+  if (target.classList.contains("kinect-robot-select")) {
+    selectedKinectRobotId = target.value;
+    selectedKinectStream = "";
+    localStorage.setItem("autofleet_kinect_robot", selectedKinectRobotId);
+    localStorage.removeItem("autofleet_kinect_stream");
+    renderKinectStage(robotsCache);
+    return;
+  }
+  if (target.classList.contains("kinect-stream-select")) {
+    selectedKinectStream = normalizeStreamKey(target.value);
+    localStorage.setItem("autofleet_kinect_stream", selectedKinectStream);
+    renderKinectStage(robotsCache);
+  }
+});
+
 document.addEventListener("keydown", (ev) => {
   if (!shouldHandleTeleop(ev)) return;
   ev.preventDefault();
@@ -1454,20 +2021,42 @@ if (diagStopBtn) {
   };
 }
 
-document.getElementById("applyApiBaseBtn").onclick = async () => {
+async function applyCurrentApiBase() {
+  const next = normalizeApiBaseInput(apiBaseInput.value || apiBaseCustomInput?.value || "");
+  if (!next) return;
   try {
-    const next = apiBaseInput.value.trim();
-    if (!next) {
-      throw new Error("API endpoint is empty");
-    }
-    setApiBase(next);
+    setApiBase(next, { pinned: true });
+    setEndpointStatus(`Using ${describeApiBase(next)}`, "online");
     await refreshRobots();
     await refreshFormation({ quiet: true });
     await refreshDiagnosticsSnapshot({ quiet: true });
   } catch (err) {
+    setEndpointStatus(`Selected API failed: ${describeApiBase(next)}`, "offline");
     print({ error: String(err) });
   }
-};
+}
+
+apiBaseInput.addEventListener("change", () => {
+  void applyCurrentApiBase();
+});
+
+if (applyApiBaseBtn) {
+  applyApiBaseBtn.onclick = () => {
+    const next = normalizeApiBaseInput(apiBaseCustomInput?.value || apiBaseInput.value);
+    if (!next) return;
+    apiBaseInput.value = next;
+    void applyCurrentApiBase();
+  };
+}
+
+if (detectApiBtn) {
+  detectApiBtn.onclick = async () => {
+    apiBasePinned = false;
+    availableApiBases = [];
+    await detectApiEndpoints();
+    await refreshAll({ quiet: true });
+  };
+}
 
 document.getElementById("teleopStopBtn").onclick = async () => {
   try {
@@ -1600,11 +2189,18 @@ window.addEventListener("resize", () => {
   drawDiagChart();
 });
 
-applyNeoTheme();
-setDiagStatus("Idle.");
-setView(localStorage.getItem("autofleet_view") || "control");
-loadVideoSettings().catch(() => {});
-refreshRobots()
-  .then(() => refreshDiagnosticsSnapshot({ quiet: true }))
-  .catch((err) => print({ error: String(err) }));
-refreshFormation({ quiet: true }).catch((err) => print({ error: String(err) }));
+async function boot() {
+  applyNeoTheme();
+  initApiBase();
+  setEndpointStatus(`Using ${describeApiBase(apiBase)} while detecting alternatives...`, "online");
+  setDiagStatus("Idle.");
+  setView(localStorage.getItem("autofleet_view") || "control");
+  detectApiEndpoints().catch((err) => setEndpointStatus(`Endpoint detection failed: ${String(err)}`, "offline"));
+  loadVideoSettings().catch(() => {});
+  refreshRobots()
+    .then(() => refreshDiagnosticsSnapshot({ quiet: true }))
+    .catch((err) => print({ error: String(err) }));
+  refreshFormation({ quiet: true }).catch((err) => print({ error: String(err) }));
+}
+
+boot().catch((err) => print({ error: String(err) }));

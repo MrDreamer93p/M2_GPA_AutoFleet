@@ -23,6 +23,7 @@ class Robot:
     state: str = "IDLE"
     mission_id: str | None = None
     video_rtsp_url: str | None = None
+    video_streams: dict[str, str] | None = None
     video_view_profile: str | None = None
     linear_x: float = 0.0
     angular_z: float = 0.0
@@ -59,6 +60,7 @@ class Simulator:
                 y=random.uniform(0.0, 2.0),
                 yaw=0.0,
                 video_rtsp_url=self.build_video_source(rid),
+                video_streams=self.build_video_streams(rid),
                 video_view_profile=self.build_video_view_profile(idx, rid),
                 latency_base_ms=random.uniform(18.0, 36.0),
                 loss_base_pct=random.uniform(0.1, 1.2),
@@ -96,6 +98,25 @@ class Simulator:
             profiles = ("side_left", "front_center", "side_right")
             return profiles[index % len(profiles)]
         return self.video_view_mode
+
+    def build_video_streams(self, robot_id: str) -> dict[str, str] | None:
+        source_cfg = self.video_source_map.get(robot_id) or {}
+        streams = source_cfg.get("video_streams")
+        if isinstance(streams, dict):
+            normalized: dict[str, str] = {}
+            for stream_name, stream_url in streams.items():
+                key = str(stream_name or "").strip().replace("-", "_")
+                value = str(stream_url or "").strip()
+                if not key or not value:
+                    continue
+                if key not in normalized:
+                    normalized[key] = value
+            if normalized:
+                return normalized
+        legacy = source_cfg.get("source_url") or self.build_video_source(robot_id)
+        if legacy:
+            return {"color": str(legacy)}
+        return None
 
     def on_connect(self, client: mqtt.Client, *_):
         client.subscribe(f"{self.prefix}/cmd/+")
@@ -181,6 +202,7 @@ class Simulator:
                     "state": robot.state,
                     "mission_id": robot.mission_id,
                     "video_rtsp_url": robot.video_rtsp_url,
+                    "video_streams": robot.video_streams,
                     "video_view_profile": robot.video_view_profile,
                     "controls": {"linear_x": round(robot.linear_x, 3), "angular_z": round(robot.angular_z, 3)},
                     "motors": {
@@ -209,6 +231,7 @@ class Simulator:
                             "battery": round(robot.battery, 3),
                             "state": robot.state,
                             "video_rtsp_url": robot.video_rtsp_url,
+                            "video_streams": robot.video_streams,
                             "video_view_profile": robot.video_view_profile,
                         },
                     }
@@ -271,9 +294,20 @@ def load_video_source_map(path_value: str) -> dict[str, dict[str, str | None]]:
     for robot_id, cfg in payload.items():
         if not isinstance(cfg, dict):
             continue
+        video_streams = cfg.get("video_streams")
+        if not isinstance(video_streams, dict):
+            legacy = str(cfg.get("source_url") or "").strip()
+            video_streams = {"color": legacy} if legacy else {}
+        normalized_streams: dict[str, str] = {}
+        for stream_name, stream_url in video_streams.items():
+            key = str(stream_name or "").strip().lower().replace("-", "_")
+            value = str(stream_url or "").strip()
+            if key and value:
+                normalized_streams[key] = value
         result[str(robot_id)] = {
             "source_url": str(cfg.get("source_url") or "").strip() or None,
             "video_view_profile": str(cfg.get("video_view_profile") or "").strip() or None,
+            "video_streams": normalized_streams,
         }
     return result
 

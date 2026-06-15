@@ -9,6 +9,11 @@ param(
   [string]$RtspPaths = "camera,stream,live,cam,video",
   [string]$RtspUsername = "",
   [string]$RtspPassword = "",
+  [string]$VideoStreams = "",
+  [switch]$EnableKinect,
+  [string]$KinectRobotId = "KINECT-WIN",
+  [int]$KinectPort = 8450,
+  [switch]$NoStop,
   [switch]$KeepDocker
 )
 
@@ -20,15 +25,69 @@ $SnapshotDir = Join-Path $Root "data\artifacts\snapshots"
 
 New-Item -ItemType Directory -Force -Path $RunDir, $LogDir, $SnapshotDir | Out-Null
 
+function Test-AutoFleetProcess($Proc) {
+  if (-not $Proc -or -not $Proc.CommandLine) {
+    return $false
+  }
+  if ($Proc.ProcessId -eq $PID) {
+    return $false
+  }
+  $name = [string]$Proc.Name
+  if ($name -match '^(Code|Code - Insiders|Codex|codex|Cursor)\.exe$') {
+    return $false
+  }
+  $cmd = [string]$Proc.CommandLine
+  if ($cmd.Contains("\Microsoft VS Code\") -or $cmd.Contains("\.vscode\extensions\") -or $cmd.Contains("--type=extensionHost")) {
+    return $false
+  }
+  if ($cmd -notlike "*$Root*") {
+    return $false
+  }
+  return (
+    (($name -match '^python(\.exe)?$') -and ($cmd.Contains("tools/local_mqtt_broker.py") -or $cmd.Contains("tools\local_mqtt_broker.py"))) -or
+    (($name -match '^python(\.exe)?$') -and $cmd.Contains("register_real_rtsp.py")) -or
+    (($name -eq "KinectWindowsMjpegBridge.exe") -and $cmd.Contains("KinectWindowsMjpegBridge.exe")) -or
+    (($name -match '^python(\.exe)?$') -and $cmd.Contains("uvicorn main:app") -and ($cmd.Contains("backend") -or $cmd.Contains("workers\video_worker") -or $cmd.Contains("workers/video_worker"))) -or
+    (($name -match '^python(\.exe)?$') -and $cmd.Contains("http.server 3000") -and $cmd.Contains("frontend")) -or
+    (($name -match '^python(\.exe)?$') -and ($cmd.Contains("workers\perception_worker") -or $cmd.Contains("workers/perception_worker")))
+  )
+}
+
 function Stop-ByPidFile([string]$Name) {
   $pidFile = Join-Path $RunDir "$Name.pid"
   if (Test-Path $pidFile) {
     $procId = [int](Get-Content $pidFile -Raw)
-    $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
-    if ($proc) {
+    $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $procId" -ErrorAction SilentlyContinue
+    if (Test-AutoFleetProcess $proc) {
       Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+      Write-Host "stopped $Name pid=$procId"
+    } elseif ($proc) {
+      Write-Host "pid file $Name pointed to non-AutoFleet process pid=$procId; leaving process alive"
     }
     Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Stop-WorkspaceProcess {
+  $procs = Get-CimInstance Win32_Process |
+    Where-Object { Test-AutoFleetProcess $_ }
+  foreach ($proc in $procs) {
+    Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+    Write-Host "stopped stale workspace process pid=$($proc.ProcessId)"
+  }
+}
+
+function Stop-PortOwnerIfWorkspace([int]$Port) {
+  $connections = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+  foreach ($conn in $connections) {
+    if (-not $conn.OwningProcess) {
+      continue
+    }
+    $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $($conn.OwningProcess)" -ErrorAction SilentlyContinue
+    if (Test-AutoFleetProcess $proc) {
+      Stop-Process -Id $conn.OwningProcess -Force -ErrorAction SilentlyContinue
+      Write-Host "stopped stale workspace port $Port owner pid=$($conn.OwningProcess)"
+    }
   }
 }
 
@@ -38,7 +97,9 @@ function Start-LocalProcess(
   [string]$Command,
   [hashtable]$Env = @{}
 ) {
-  Stop-ByPidFile $Name
+  if (-not $NoStop) {
+    Stop-ByPidFile $Name
+  }
   $envScript = ($Env.GetEnumerator() | ForEach-Object {
     "`$env:$($_.Key) = '$($_.Value -replace "'", "''")'"
   }) -join "; "
@@ -219,7 +280,7 @@ $ResolvedPublicHost = Resolve-PublicHost
 Write-Host "Public host: $ResolvedPublicHost"
 $ResolvedRtspUrl = Resolve-RtspUrl
 
-if (-not $KeepDocker) {
+if ((-not $KeepDocker) -and (-not $NoStop)) {
   $compose = Join-Path $Root "infra\compose.yml"
   if (Get-Command docker -ErrorAction SilentlyContinue) {
     $oldErrorActionPreference = $ErrorActionPreference
@@ -234,8 +295,16 @@ if (-not $KeepDocker) {
   }
 }
 
-foreach ($name in @("register-real-rtsp", "frontend", "perception-worker", "video-worker", "backend", "mqtt-broker")) {
-  Stop-ByPidFile $name
+if (-not $NoStop) {
+  foreach ($name in @("register-real-rtsp", "frontend", "perception-worker", "video-worker", "backend", "mqtt-broker")) {
+    Stop-ByPidFile $name
+  }
+  Stop-WorkspaceProcess
+  foreach ($port in @(3000, 3889, 3890, 8200, 8201, 8400, 8401, $KinectPort)) {
+    Stop-PortOwnerIfWorkspace $port
+  }
+} else {
+  Write-Host "NoStop mode: leaving existing processes untouched."
 }
 
 Start-LocalProcess `
@@ -306,10 +375,25 @@ Start-LocalProcess `
   -Command "python -m http.server 3000 --bind 0.0.0.0"
 
 if ($ResolvedRtspUrl.Trim()) {
+  $registerCommand = "python tools/register_real_rtsp.py --host 127.0.0.1 --port 3889 --robot-id $(Escape-PowerShellArg $RobotId) --rtsp-url $(Escape-PowerShellArg $ResolvedRtspUrl)"
+  if ($VideoStreams.Trim()) {
+    $registerCommand += " --video-streams $(Escape-PowerShellArg $VideoStreams)"
+  }
   Start-LocalProcess `
     -Name "register-real-rtsp" `
     -WorkingDirectory $Root `
-    -Command "python tools/register_real_rtsp.py --host 127.0.0.1 --port 3889 --robot-id $(Escape-PowerShellArg $RobotId) --rtsp-url $(Escape-PowerShellArg $ResolvedRtspUrl)"
+    -Command $registerCommand
+}
+
+if ($EnableKinect) {
+  Write-Host "Starting Kinect bridge and registering $KinectRobotId..."
+  & (Join-Path $Root "tools\start_kinect_windows_bridge.ps1") `
+    -Port $KinectPort `
+    -RobotId $KinectRobotId `
+    -MqttHost "127.0.0.1" `
+    -MqttPort 3889 `
+    -TopicPrefix "fleet/v1" `
+    -PublicBase "http://127.0.0.1:$KinectPort" | Out-Host
 }
 
 Start-Sleep -Seconds 4
@@ -322,8 +406,14 @@ Write-Host "Video streams: http://127.0.0.1:8400/streams"
 Write-Host "MQTT broker:   0.0.0.0:3889"
 if ($ResolvedRtspUrl.Trim()) {
   Write-Host "Registered:    $RobotId -> $ResolvedRtspUrl"
+  if ($VideoStreams.Trim()) {
+    Write-Host "Streams:       $VideoStreams"
+  }
 } else {
   Write-Host "Waiting for Raspberry MQTT telemetry on fleet/v1/telemetry/<robot_id>"
+}
+if ($EnableKinect) {
+  Write-Host "Kinect:        $KinectRobotId -> http://127.0.0.1:$KinectPort/streams"
 }
 Write-Host ""
 Write-Host "Logs are in data\logs\*.log"

@@ -71,6 +71,7 @@ body {
 .fleet-panel,
 .overview-panel,
 .network-panel,
+.kinect-panel,
 .video-panel,
 .risk-panel {
   grid-column: 1 / 2;
@@ -198,7 +199,7 @@ h2 {
 
 .api-config {
   display: grid;
-  grid-template-columns: 1fr 220px;
+  grid-template-columns: 1fr;
   align-items: end;
   gap: 10px;
 }
@@ -206,6 +207,38 @@ h2 {
 .api-config label {
   grid-column: 1 / -1;
   margin: 0;
+}
+
+.endpoint-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.endpoint-row input,
+.endpoint-row select {
+  margin: 0;
+}
+
+.endpoint-btn {
+  width: 100%;
+  padding: 8px 10px;
+  box-shadow: none;
+}
+
+.endpoint-status {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.endpoint-status[data-state="online"] {
+  color: var(--ok);
+}
+
+.endpoint-status[data-state="offline"] {
+  color: var(--bad);
 }
 
 label {
@@ -487,9 +520,125 @@ pre {
   padding: 10px;
 }
 
+.kinect-stage {
+  display: grid;
+  gap: 10px;
+}
+
+.kinect-live {
+  border: var(--border-w) solid var(--accent-alt);
+  background: var(--surface-elev);
+  box-shadow: 0 0 0 4px rgba(255, 98, 191, 0.18), var(--hard-shadow), var(--panel-glow);
+}
+
+.kinect-live-head {
+  min-height: 54px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: var(--border-w) solid var(--line-soft);
+}
+
+.kinect-view {
+  height: min(58vh, 640px);
+  min-height: 420px;
+  background: #050505;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  overflow: hidden;
+}
+
+.kinect-view .mjpeg-stream,
+.kinect-view .snapshot-thumb {
+  object-fit: contain;
+}
+
+.kinect-multiview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px;
+  background: #050505;
+}
+
+.kinect-channel {
+  min-width: 0;
+  border: var(--border-w) solid var(--line-soft);
+  background: #0b0b0b;
+}
+
+.kinect-channel-head {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: var(--border-w) solid var(--line-soft);
+}
+
+.kinect-channel-head strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+}
+
+.kinect-channel-view {
+  aspect-ratio: 16 / 9;
+  height: auto;
+  min-height: 0;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.kinect-channel-view .mjpeg-stream,
+.kinect-channel-view .snapshot-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.kinect-meta {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border-top: var(--border-w) solid var(--line-soft);
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.76rem;
+  word-break: break-word;
+}
+
+.kinect-empty {
+  min-height: 320px;
+  border: var(--border-w) dashed var(--line-soft);
+  background: #0b0b0b;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 8px;
+  color: var(--muted);
+  text-align: center;
+  padding: 24px;
+}
+
+.kinect-empty strong {
+  color: var(--text);
+}
+
 .video-wall {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
   gap: 10px;
 }
 
@@ -508,6 +657,12 @@ pre {
   box-shadow: var(--hard-shadow), var(--panel-glow);
 }
 
+.video-card.kinect-focus {
+  border-color: var(--accent-alt);
+  box-shadow: 0 0 0 4px rgba(255, 98, 191, 0.25), var(--hard-shadow), var(--panel-glow);
+  grid-column: span 2;
+}
+
 .video-card-head {
   display: flex;
   justify-content: space-between;
@@ -517,8 +672,14 @@ pre {
   font-size: 0.86rem;
 }
 
+.video-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .video-view {
-  height: 190px;
+  height: 280px;
   background: #0b0b0b;
   border-bottom: var(--border-w) solid var(--line-soft);
   display: flex;
@@ -528,6 +689,29 @@ pre {
   text-align: center;
   padding: 10px;
   font-size: 0.84rem;
+}
+
+.video-card.kinect-focus .video-view {
+  height: 420px;
+}
+
+.stream-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.stream-switch span {
+  text-transform: uppercase;
+}
+
+.video-stream-select {
+  width: auto;
+  min-width: 110px;
+  margin: 0;
 }
 
 .video-view video {
@@ -717,6 +901,7 @@ pre {
   .fleet-panel,
   .overview-panel,
   .network-panel,
+  .kinect-panel,
   .video-panel,
   .risk-panel,
   .control-panel,
@@ -730,6 +915,10 @@ pre {
   }
 
   .api-config {
+    grid-template-columns: 1fr;
+  }
+
+  .endpoint-row {
     grid-template-columns: 1fr;
   }
 
@@ -772,5 +961,37 @@ pre {
   .network-controls {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .video-card.kinect-focus {
+    grid-column: 1 / -1;
+  }
+
+  .video-card.kinect-focus .video-view {
+    height: 260px;
+  }
+
+  .kinect-live-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .kinect-view {
+    min-height: 300px;
+    height: 54vh;
+  }
+
+  .kinect-multiview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .kinect-channel-view {
+    aspect-ratio: 16 / 9;
+  }
+}
+
+@media (max-width: 760px) {
+  .kinect-multiview {
+    grid-template-columns: 1fr;
   }
 }

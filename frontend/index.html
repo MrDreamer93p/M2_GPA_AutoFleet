@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./styles.css?v=20260615-kinect-grid">
 </head>
 <body>
   <main class="app-shell">
@@ -33,10 +33,20 @@
     <section class="panel elevated api-panel">
       <div class="api-config">
         <label for="apiBase">API Endpoint</label>
-        <input id="apiBase" placeholder="http://192.168.1.100:8000/api/v1">
-        <button id="applyApiBaseBtn" class="btn subtle">Apply Endpoint</button>
+        <div class="endpoint-row">
+          <select id="apiBase">
+            <option value="">Detecting API endpoints...</option>
+          </select>
+          <button id="detectApiBtn" class="btn subtle endpoint-btn">Detect</button>
+        </div>
+        <div class="endpoint-row">
+          <input id="apiBaseCustom" placeholder="Custom endpoint, e.g. 127.0.0.1:8200 or http://host:8200/api/v1">
+          <button id="applyApiBaseBtn" class="btn subtle endpoint-btn">Use</button>
+        </div>
+        <div id="apiEndpointStatus" class="endpoint-status">Detecting local AutoFleet API endpoints...</div>
       </div>
-      <p class="hint small">This is the web-to-backend control address. Use your laptop LAN IP when opened from another device.</p>
+      <p class="hint small">
+        This is the backend API endpoint. Video streams are routed through the backend proxy, for example <code>/api/v1/video/proxy/{robot}.mjpeg?stream=color</code>.</p>
     </section>
 
     <section class="panel fleet-panel view-control">
@@ -120,9 +130,19 @@
       <pre id="formationStatus"></pre>
     </section>
 
+    <section class="panel kinect-panel view-control">
+      <div class="section-head">
+        <h2>Kinect Studio</h2>
+        <div class="kinect-controls">
+          <span class="badge" id="kinectStatus">Waiting for Kinect stream</span>
+        </div>
+      </div>
+      <div id="kinectStage" class="kinect-stage"></div>
+    </section>
+
     <section class="panel video-panel view-control">
       <div class="section-head">
-        <h2>Video Wall</h2>
+        <h2>Vehicle Video Wall</h2>
         <div class="video-controls">
           <span class="badge" id="videoQualityStatus">Browser-playable streams</span>
           <label class="inline metric-inline">
@@ -234,6 +254,6 @@
       <pre id="diagOutput"></pre>
     </section>
   </main>
-  <script src="./app.js"></script>
+  <script src="./app.js?v=20260615-kinect-sdk-mjpeg-v5"></script>
 </body>
 </html>

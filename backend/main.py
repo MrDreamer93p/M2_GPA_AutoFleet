@@ -5,10 +5,12 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from autofleet_backend.app_state import AppState
 from autofleet_backend.config import settings
@@ -237,6 +239,70 @@ def video_worker_request(path: str, *, method: str = "GET", payload: dict[str, A
         raise HTTPException(status_code=503, detail=f"Video worker unavailable: {exc.reason}") from exc
 
 
+def video_worker_stream(path: str):
+    url = f"{settings.video_worker_base.rstrip('/')}{path}"
+    request = Request(url, method="GET", headers={"Accept": "multipart/x-mixed-replace"})
+    try:
+        response = urlopen(request, timeout=8)
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise HTTPException(status_code=exc.code, detail=detail or str(exc)) from exc
+    except URLError as exc:
+        raise HTTPException(status_code=503, detail=f"Video worker unavailable: {exc.reason}") from exc
+
+    def generate():
+        try:
+            while True:
+                chunk = response.read(64 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            response.close()
+
+    return generate()
+
+
+def _registered_source_url(robot_id: str, stream: str | None) -> str | None:
+    selected = (stream or "").strip().lower().replace("-", "_")
+    for item in state.runtime.list_video_streams():
+        if str(item.get("robot_id")) != robot_id:
+            continue
+        source_map = item.get("source_map") or item.get("video_streams") or {}
+        if selected and isinstance(source_map, dict) and source_map.get(selected):
+            return str(source_map[selected])
+        if isinstance(source_map, dict):
+            for key in ("color", "rgb", "default"):
+                if source_map.get(key):
+                    return str(source_map[key])
+        source_url = item.get("source_url")
+        return str(source_url) if source_url else None
+    return None
+
+
+def direct_mjpeg_stream(source_url: str):
+    request = Request(source_url, method="GET", headers={"Accept": "multipart/x-mixed-replace"})
+    try:
+        response = urlopen(request, timeout=8)
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise HTTPException(status_code=exc.code, detail=detail or str(exc)) from exc
+    except URLError as exc:
+        raise HTTPException(status_code=503, detail=f"Video source unavailable: {exc.reason}") from exc
+
+    def generate():
+        try:
+            while True:
+                chunk = response.read(64 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            response.close()
+
+    return generate()
+
+
 @app.get("/api/v1/video/settings")
 def get_video_settings() -> dict[str, Any]:
     return video_worker_request("/settings")
@@ -245,6 +311,34 @@ def get_video_settings() -> dict[str, Any]:
 @app.post("/api/v1/video/settings")
 def update_video_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     return video_worker_request("/settings", method="POST", payload=payload)
+
+
+@app.get("/api/v1/video/proxy/{robot_id}.mjpeg")
+def proxy_video_stream(robot_id: str, stream: str | None = Query(default=None)) -> StreamingResponse:
+    source_url = _registered_source_url(robot_id, stream)
+    if source_url and source_url.lower().startswith(("http://", "https://")) and ".mjpeg" in source_url.lower():
+        return StreamingResponse(
+            direct_mjpeg_stream(source_url),
+            media_type="multipart/x-mixed-replace; boundary=frame",
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"},
+        )
+    path = f"/streams/{quote(robot_id, safe='')}.mjpeg"
+    if stream:
+        path += f"?stream={quote(stream, safe='')}"
+    return StreamingResponse(
+        video_worker_stream(path),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"},
+    )
+
+
+@app.get("/api/v1/video/snapshots/{name}")
+def proxy_video_snapshot(name: str) -> StreamingResponse:
+    return StreamingResponse(
+        video_worker_stream(f"/snapshots/{quote(name, safe='')}"),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"},
+    )
 
 
 @app.get("/api/v1/perception")

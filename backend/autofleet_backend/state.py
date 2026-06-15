@@ -257,6 +257,10 @@ class RuntimeState:
                     "robot_id": robot_id,
                     "status": status.status if status else "offline",
                     "source_url": (status.source_url if status else None) or (telem.video_rtsp_url if telem else None),
+                    "source_url_key": status.source_url_key if status else None,
+                    "stream_key": status.source_url_key if status else None,
+                    "available_streams": (status.available_streams if status else None),
+                    "source_map": (status.source_map if status else None) or (telem.video_streams if telem else None),
                     "view_profile": (status.view_profile if status else None) or (telem.video_view_profile if telem else None),
                     "proxy_url": status.proxy_url if status else None,
                     "snapshot_url": status.snapshot_url if status else None,
@@ -265,6 +269,7 @@ class RuntimeState:
                     "bitrate_kbps": status.bitrate_kbps if status else None,
                     "codec": status.codec if status else None,
                     "note": status.note if status else None,
+                    "video_streams": telem.video_streams if telem else None,
                 }
             )
         return out
@@ -359,6 +364,7 @@ class RuntimeState:
                     "battery": telem.battery,
                     "mission_id": telem.mission_id,
                     "video_rtsp_url": telem.video_rtsp_url,
+                    "video_streams": telem.video_streams,
                     "video_view_profile": telem.video_view_profile,
                     "pose": telem.pose.model_dump(),
                     "controls": raw.get("controls") or (telem.controls.model_dump() if telem.controls else None),

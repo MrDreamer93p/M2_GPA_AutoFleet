@@ -97,6 +97,7 @@ class Telemetry(BaseModel):
     state: str
     mission_id: str | None = None
     video_rtsp_url: str | None = None
+    video_streams: dict[str, str] | None = None
     video_view_profile: str | None = None
     controls: ControlState | None = None
     motors: MotorState | None = None
@@ -165,7 +166,10 @@ class VideoStreamStatus(BaseModel):
     robot_id: str
     ts: int
     source_url: str | None = None
+    source_url_key: str | None = None
     view_profile: str | None = None
+    available_streams: list[str] | None = None
+    source_map: dict[str, str] | None = None
     proxy_url: str | None = None
     snapshot_url: str | None = None
     status: Literal["online", "degraded", "offline"] | str = "offline"
