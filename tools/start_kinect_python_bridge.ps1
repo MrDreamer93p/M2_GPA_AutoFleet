@@ -122,6 +122,7 @@ for ($i = 0; $i -lt 12; $i++) {
 }
 
 Write-Host "Kinect stream endpoints:"
+Write-Host "Kinect bridge profile: low-latency MJPEG (adaptive; check /health streams for actual FPS)"
 Write-Host "$base/streams"
 foreach ($name in @("color", "depth", "distance", "infrared", "body_index", "skeleton")) {
   Write-Host "$base/streams/$name.mjpeg"

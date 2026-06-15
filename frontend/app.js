@@ -79,6 +79,7 @@ let videoSettingsCache = null;
 let selectedStreamsByRobot = {};
 let selectedKinectRobotId = localStorage.getItem("autofleet_kinect_robot") || "";
 let selectedKinectStream = localStorage.getItem("autofleet_kinect_stream") || "";
+let kinectFullscreenOverlay = null;
 const stressState = {
   running: false,
   startedAt: 0,
@@ -815,7 +816,7 @@ function renderKinectStage(items) {
     .map((streamKey) => {
       const normalized = normalizeStreamKey(streamKey);
       return `
-        <article class="kinect-channel" data-stream="${escapeHtml(normalized)}">
+        <article class="kinect-channel" data-stream="${escapeHtml(normalized)}" title="Double-click to expand">
           <div class="kinect-channel-head">
             <strong>${escapeHtml(streamDisplayName(normalized))}</strong>
             <span class="flag-pill ${severityClass(streamState === "online" ? "ok" : "warning")}">${escapeHtml(streamState)}</span>
@@ -973,6 +974,51 @@ function buildStreamView(robot, selectedStream) {
     `;
   }
   return `<div class="stream-note">No stream URL in telemetry yet.</div>`;
+}
+
+function closeKinectFullscreen() {
+  if (!kinectFullscreenOverlay) return;
+  kinectFullscreenOverlay.remove();
+  kinectFullscreenOverlay = null;
+  document.body.classList.remove("kinect-fullscreen-open");
+}
+
+function openKinectFullscreen(channelEl) {
+  const streamKey = normalizeStreamKey(channelEl.dataset.stream || "color");
+  const robotId = channelEl.closest(".kinect-live")?.dataset?.robotId || selectedKinectRobotId;
+  const robot = robotsCache.find((item) => String(item.robot_id || "") === robotId) || robotsCache.find(isKinectRobot);
+  if (!robot) return;
+
+  closeKinectFullscreen();
+  const liveUrl = kinectLiveStreamUrl(robot, streamKey);
+  const overlay = document.createElement("div");
+  overlay.className = "kinect-fullscreen";
+  overlay.setAttribute("role", "dialog");
+  overlay.setAttribute("aria-modal", "true");
+  overlay.dataset.stream = streamKey;
+  overlay.innerHTML = `
+    <div class="kinect-fullscreen-head">
+      <strong>${escapeHtml(robot.robot_id || "Kinect")} / ${escapeHtml(streamDisplayName(streamKey))}</strong>
+      <button class="btn kinect-fullscreen-close" type="button" aria-label="Close Kinect fullscreen">CLOSE</button>
+    </div>
+    <div class="kinect-fullscreen-view">
+      <img class="mjpeg-stream kinect-sdk-stream" src="${escapeHtml(liveUrl)}" alt="Live SDK stream for ${escapeHtml(robot.robot_id)} ${escapeHtml(streamDisplayName(streamKey))}">
+    </div>
+  `;
+  overlay.addEventListener("click", (ev) => {
+    if (ev.target === overlay || ev.target?.classList?.contains("kinect-fullscreen-close")) {
+      closeKinectFullscreen();
+    }
+  });
+  overlay.addEventListener("dblclick", (ev) => {
+    if (ev.target instanceof Element && ev.target.closest(".kinect-fullscreen-view")) {
+      closeKinectFullscreen();
+    }
+  });
+  document.body.appendChild(overlay);
+  document.body.classList.add("kinect-fullscreen-open");
+  kinectFullscreenOverlay = overlay;
+  overlay.querySelector(".kinect-fullscreen-close")?.focus();
 }
 
 function syncDefaultRobotIds(items) {
@@ -1956,7 +2002,20 @@ kinectStage.addEventListener("change", (ev) => {
   }
 });
 
+kinectStage.addEventListener("dblclick", (ev) => {
+  if (!(ev.target instanceof Element)) return;
+  const channelEl = ev.target.closest(".kinect-channel");
+  if (!channelEl) return;
+  ev.preventDefault();
+  openKinectFullscreen(channelEl);
+});
+
 document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && kinectFullscreenOverlay) {
+    ev.preventDefault();
+    closeKinectFullscreen();
+    return;
+  }
   if (!shouldHandleTeleop(ev)) return;
   ev.preventDefault();
   const key = normalizeKey(ev.key);

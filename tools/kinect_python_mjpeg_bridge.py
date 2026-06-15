@@ -6,12 +6,18 @@ import json
 import sys
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+
+try:
+    import cv2  # type: ignore
+except Exception:
+    cv2 = None
 
 ROOT = Path(__file__).resolve().parents[1]
 VENDOR = ROOT / "tools" / "vendor"
@@ -24,6 +30,13 @@ from pykinect2 import PyKinectRuntime, PyKinectV2  # noqa: E402
 
 
 STREAMS = ["color", "depth", "distance", "infrared", "body_index", "skeleton"]
+LOW_LATENCY_INTERVALS = {
+    "color": 1.0 / 24.0,
+    "depth": 1.0 / 15.0,
+    "infrared": 1.0 / 15.0,
+    "body_index": 1.0 / 10.0,
+    "body": 1.0 / 10.0,
+}
 BONES = [
     ("Head", "Neck"),
     ("Neck", "SpineShoulder"),
@@ -61,6 +74,9 @@ class KinectState:
         self.condition = threading.Condition(self.lock)
         self.latest: dict[str, bytes] = {}
         self.versions: dict[str, int] = {}
+        self.stream_counts: dict[str, int] = {}
+        self.stream_last_ts: dict[str, float] = {}
+        self.stream_fps: dict[str, float] = {}
         self.frames = 0
         self.note = "Starting Python Kinect bridge"
         self.last_error = ""
@@ -72,8 +88,16 @@ class KinectState:
         if not payload:
             return
         with self.condition:
+            now = time.perf_counter()
+            previous_ts = self.stream_last_ts.get(key)
             self.latest[key] = payload
             self.versions[key] = self.versions.get(key, 0) + 1
+            self.stream_counts[key] = self.stream_counts.get(key, 0) + 1
+            self.stream_last_ts[key] = now
+            if previous_ts is not None and now > previous_ts:
+                instant_fps = 1.0 / max(0.001, now - previous_ts)
+                previous_fps = self.stream_fps.get(key, instant_fps)
+                self.stream_fps[key] = previous_fps * 0.82 + instant_fps * 0.18
             self.condition.notify_all()
 
     def get_jpeg(self, key: str) -> bytes | None:
@@ -83,6 +107,19 @@ class KinectState:
     def get_jpeg_with_version(self, key: str) -> tuple[bytes | None, int]:
         with self.lock:
             return self.latest.get(key), self.versions.get(key, 0)
+
+    def stream_stats(self) -> dict[str, dict[str, float | int | None]]:
+        with self.lock:
+            now = time.perf_counter()
+            return {
+                key: {
+                    "frames": self.stream_counts.get(key, 0),
+                    "fps": round(self.stream_fps.get(key, 0.0), 1),
+                    "age_ms": round((now - self.stream_last_ts[key]) * 1000.0, 1) if key in self.stream_last_ts else None,
+                    "bytes": len(self.latest[key]) if key in self.latest else 0,
+                }
+                for key in STREAMS
+            }
 
     def wait_for_jpeg(self, key: str, previous_version: int, timeout: float = 1.0) -> tuple[bytes | None, int]:
         deadline = time.perf_counter() + timeout
@@ -134,8 +171,16 @@ def draw_status_panel(draw: ImageDraw.ImageDraw, title: str, lines: list[str], w
 
 def color_to_jpeg(frame: np.ndarray, width: int, height: int) -> bytes:
     bgra = frame.reshape((height, width, 4))
+    if cv2 is not None:
+        bgr = bgra[:, :, :3]
+        target_w = 512
+        target_h = max(1, int(height * (target_w / width)))
+        resized = cv2.resize(bgr, (target_w, target_h), interpolation=cv2.INTER_AREA)
+        ok, encoded = cv2.imencode(".jpg", resized, [int(cv2.IMWRITE_JPEG_QUALITY), 65])
+        if ok:
+            return encoded.tobytes()
     rgb = bgra[:, :, [2, 1, 0]]
-    return jpeg_bytes(Image.fromarray(rgb, "RGB"), quality=76, max_width=640)
+    return jpeg_bytes(Image.fromarray(rgb, "RGB"), quality=65, max_width=512)
 
 
 def depth_to_jpeg(depth: np.ndarray, width: int, height: int) -> bytes:
@@ -170,7 +215,7 @@ def depth_to_jpeg(depth: np.ndarray, width: int, height: int) -> bytes:
         y = 94 + int((4.5 - meters) / 3.5 * 260)
         draw.line((width - 76, y, width - 18, y), fill=(level, level, level), width=4)
         draw.text((width - 112, y - 7), f"{meters:.0f}m", fill=(255, 255, 255), font=font)
-    return jpeg_bytes(image, quality=72)
+    return jpeg_bytes(image, quality=68)
 
 
 def distance_to_jpeg(depth: np.ndarray, width: int, height: int) -> bytes:
@@ -180,7 +225,6 @@ def distance_to_jpeg(depth: np.ndarray, width: int, height: int) -> bytes:
     far_mm = 4500.0
     ratio = np.clip((mm - near_mm) / (far_mm - near_mm), 0.0, 1.0)
     ratio[~valid] = 1.0
-    near = 1.0 - ratio
     red = np.clip(255.0 * np.maximum(0.0, 1.0 - np.abs(ratio - 0.0) * 2.2), 0, 255)
     green = np.clip(255.0 * np.maximum(0.0, 1.0 - np.abs(ratio - 0.45) * 2.0), 0, 255)
     blue = np.clip(255.0 * np.maximum(0.0, 1.0 - np.abs(ratio - 1.0) * 1.6), 0, 255)
@@ -211,21 +255,14 @@ def distance_to_jpeg(depth: np.ndarray, width: int, height: int) -> bytes:
     draw.rectangle((cx - 22, cy - 22, cx + 22, cy + 22), outline=(255, 255, 255), width=2)
     draw.line((cx - 36, cy, cx + 36, cy), fill=(255, 255, 255), width=2)
     draw.line((cx, cy - 36, cx, cy + 36), fill=(255, 255, 255), width=2)
-    return jpeg_bytes(image, quality=76)
+    return jpeg_bytes(image, quality=70)
 
 
 def infrared_to_jpeg(frame: np.ndarray, width: int, height: int) -> bytes:
     ir = frame.reshape((height, width)).astype(np.float32)
     clipped = np.clip(ir, 0.0, 65535.0)
-    # Kinect IR is 16-bit. Percentile scaling preserves detail without pretending it is depth.
-    nonzero = clipped[clipped > 0]
-    if nonzero.size:
-        lo = float(np.percentile(nonzero, 1.0))
-        hi = float(np.percentile(nonzero, 99.2))
-        if hi <= lo:
-            hi = lo + 1.0
-    else:
-        lo, hi = 0.0, 65535.0
+    # Kinect IR is 16-bit. Fixed scaling is faster and avoids auto-exposure flicker in the preview.
+    lo, hi = 0.0, 12000.0
     normalized = np.clip((clipped - lo) / (hi - lo), 0.0, 1.0)
     gray = (normalized * 255.0).astype(np.uint8)
     rgb = np.dstack((gray, gray, gray))
@@ -235,8 +272,8 @@ def infrared_to_jpeg(frame: np.ndarray, width: int, height: int) -> bytes:
     draw.rectangle((8, 8, 286, 72), fill=(0, 0, 0), outline=(220, 220, 220), width=1)
     draw.text((14, 14), "INFRARED (Kinect SDK IR)", fill=(255, 255, 255), font=font)
     draw.text((14, 32), "source: FrameSourceTypes_Infrared", fill=(230, 230, 230), font=font)
-    draw.text((14, 50), f"raw 16-bit scaled p1-p99: {lo:.0f}-{hi:.0f}", fill=(230, 230, 230), font=font)
-    return jpeg_bytes(image, quality=76)
+    draw.text((14, 50), f"raw 16-bit fixed scale: {lo:.0f}-{hi:.0f}", fill=(230, 230, 230), font=font)
+    return jpeg_bytes(image, quality=70)
 
 
 def body_index_to_jpeg(frame: np.ndarray, width: int, height: int) -> bytes:
@@ -270,7 +307,7 @@ def body_index_to_jpeg(frame: np.ndarray, width: int, height: int) -> bytes:
         )
     else:
         draw.text((12, 10), f"body pixels: {body_pixels}", fill=(255, 255, 255), font=font)
-    return jpeg_bytes(image, quality=72)
+    return jpeg_bytes(image, quality=68)
 
 
 def skeleton_to_jpeg(bodies, kinect: PyKinectRuntime.PyKinectRuntime, width: int, height: int) -> bytes:
@@ -320,7 +357,7 @@ def skeleton_to_jpeg(bodies, kinect: PyKinectRuntime.PyKinectRuntime, width: int
     else:
         id_text = ",".join(str(item) for item in tracking_ids if item is not None)
         draw.text((12, 10), f"SDK skeleton | tracked bodies: {tracked} | ids: {id_text}", fill=(255, 255, 255), font=font)
-    return jpeg_bytes(image, quality=75)
+    return jpeg_bytes(image, quality=72)
 
 
 def skeleton_status_jpeg(title: str, detail: str, width: int, height: int) -> bytes:
@@ -335,7 +372,7 @@ def skeleton_status_jpeg(title: str, detail: str, width: int, height: int) -> by
         width,
         height,
     )
-    return jpeg_bytes(image, quality=75)
+    return jpeg_bytes(image, quality=72)
 
 
 def placeholder_jpeg(name: str) -> bytes:
@@ -346,7 +383,38 @@ def placeholder_jpeg(name: str) -> bytes:
     draw.text((24, 44), STATE.note, fill=(180, 180, 180), font=font)
     if STATE.last_error:
         draw.text((24, 64), STATE.last_error[:96], fill=(255, 120, 120), font=font)
-    return jpeg_bytes(image, quality=70)
+    return jpeg_bytes(image, quality=68)
+
+
+def publish_color(frame: np.ndarray, width: int, height: int) -> int:
+    STATE.set_jpeg("color", color_to_jpeg(frame, width, height))
+    return 1
+
+
+def publish_depth_pair(depth: np.ndarray, width: int, height: int) -> int:
+    STATE.set_jpeg("depth", depth_to_jpeg(depth, width, height))
+    STATE.set_jpeg("distance", distance_to_jpeg(depth, width, height))
+    return 2
+
+
+def publish_infrared(frame: np.ndarray, width: int, height: int) -> int:
+    STATE.set_jpeg("infrared", infrared_to_jpeg(frame, width, height))
+    return 1
+
+
+def publish_body_index(frame: np.ndarray, width: int, height: int) -> int:
+    STATE.set_jpeg("body_index", body_index_to_jpeg(frame, width, height))
+    return 1
+
+
+def publish_skeleton(bodies, kinect: PyKinectRuntime.PyKinectRuntime, width: int, height: int) -> int:
+    STATE.set_jpeg("skeleton", skeleton_to_jpeg(bodies, kinect, width, height))
+    return 1
+
+
+def publish_skeleton_status(title: str, detail: str, width: int, height: int) -> int:
+    STATE.set_jpeg("skeleton", skeleton_status_jpeg(title, detail, width, height))
+    return 1
 
 
 def capture_loop() -> None:
@@ -374,87 +442,106 @@ def capture_loop() -> None:
             "body_index": 0.0,
             "body": 0.0,
         }
-        intervals = {
-            "color": 0.08,
-            "depth": 0.16,
-            "infrared": 0.16,
-            "body_index": 0.22,
-            "body": 0.22,
-        }
-        while STATE.running:
-            now = time.perf_counter()
-            try:
-                sensor_available = bool(kinect._sensor.IsAvailable)
-            except Exception:
-                sensor_available = None
-            STATE.diagnostics.update({
-                "sensor_available": sensor_available,
-                "wait_handle_count": getattr(kinect, "_waitHandleCount", None),
-                "last_color_frame_time": getattr(kinect, "_last_color_frame_time", None),
-                "last_color_frame_access": getattr(kinect, "_last_color_frame_access", None),
-                "last_depth_frame_time": getattr(kinect, "_last_depth_frame_time", None),
-                "last_depth_frame_access": getattr(kinect, "_last_depth_frame_access", None),
-                "last_infrared_frame_time": getattr(kinect, "_last_infrared_frame_time", None),
-                "last_infrared_frame_access": getattr(kinect, "_last_infrared_frame_access", None),
-                "last_body_frame_time": getattr(kinect, "_last_body_frame_time", None),
-                "last_body_frame_access": getattr(kinect, "_last_body_frame_access", None),
-                "last_body_frame_error": getattr(kinect, "_last_body_frame_error", ""),
-                "sdk_tracked_bodies": getattr(kinect, "_last_body_frame_tracked_count", 0),
-                "sdk_tracking_ids": getattr(kinect, "_last_body_frame_tracking_ids", []),
-                "last_body_index_frame_time": getattr(kinect, "_last_body_index_frame_time", None),
-                "last_body_index_frame_access": getattr(kinect, "_last_body_index_frame_access", None),
-            })
-            updated = False
-            if now - last_encoded["color"] >= intervals["color"] and kinect.has_new_color_frame():
-                color = kinect.get_last_color_frame()
-                if color is not None:
-                    STATE.set_jpeg("color", color_to_jpeg(color, color_w, color_h))
-                last_encoded["color"] = now
-                updated = True
-            if now - last_encoded["depth"] >= intervals["depth"] and kinect.has_new_depth_frame():
-                depth = kinect.get_last_depth_frame()
-                if depth is not None:
-                    STATE.set_jpeg("depth", depth_to_jpeg(depth, depth_w, depth_h))
-                    STATE.set_jpeg("distance", distance_to_jpeg(depth, depth_w, depth_h))
-                last_encoded["depth"] = now
-                updated = True
-            if now - last_encoded["infrared"] >= intervals["infrared"] and kinect.has_new_infrared_frame():
-                infrared = kinect.get_last_infrared_frame()
-                if infrared is not None:
-                    STATE.set_jpeg("infrared", infrared_to_jpeg(infrared, infrared_w, infrared_h))
-                last_encoded["infrared"] = now
-                updated = True
-            if now - last_encoded["body_index"] >= intervals["body_index"] and kinect.has_new_body_index_frame():
-                body_index = kinect.get_last_body_index_frame()
-                if body_index is not None:
-                    STATE.set_jpeg("body_index", body_index_to_jpeg(body_index, depth_w, depth_h))
-                last_encoded["body_index"] = now
-                updated = True
-            if now - last_encoded["body"] >= intervals["body"]:
-                if kinect.has_new_body_frame():
-                    bodies = kinect.get_last_body_frame()
-                    if bodies is not None:
-                        skeleton = skeleton_to_jpeg(bodies, kinect, depth_w, depth_h)
-                        STATE.set_jpeg("skeleton", skeleton)
+        intervals = LOW_LATENCY_INTERVALS
+        in_flight: dict[str, Future[int]] = {}
+        with ThreadPoolExecutor(max_workers=6, thread_name_prefix="kinect-encode") as executor:
+            while STATE.running:
+                now = time.perf_counter()
+                completed = 0
+                for key, future in list(in_flight.items()):
+                    if not future.done():
+                        continue
+                    in_flight.pop(key, None)
+                    try:
+                        completed += int(future.result() or 0)
+                    except Exception as exc:
+                        STATE.last_error = repr(exc)
+
+                try:
+                    sensor_available = bool(kinect._sensor.IsAvailable)
+                except Exception:
+                    sensor_available = None
+                STATE.diagnostics.update({
+                    "sensor_available": sensor_available,
+                    "wait_handle_count": getattr(kinect, "_waitHandleCount", None),
+                    "encoder_in_flight": sorted(in_flight.keys()),
+                    "last_color_frame_time": getattr(kinect, "_last_color_frame_time", None),
+                    "last_color_frame_access": getattr(kinect, "_last_color_frame_access", None),
+                    "last_depth_frame_time": getattr(kinect, "_last_depth_frame_time", None),
+                    "last_depth_frame_access": getattr(kinect, "_last_depth_frame_access", None),
+                    "last_infrared_frame_time": getattr(kinect, "_last_infrared_frame_time", None),
+                    "last_infrared_frame_access": getattr(kinect, "_last_infrared_frame_access", None),
+                    "last_body_frame_time": getattr(kinect, "_last_body_frame_time", None),
+                    "last_body_frame_access": getattr(kinect, "_last_body_frame_access", None),
+                    "last_body_frame_error": getattr(kinect, "_last_body_frame_error", ""),
+                    "sdk_tracked_bodies": getattr(kinect, "_last_body_frame_tracked_count", 0),
+                    "sdk_tracking_ids": getattr(kinect, "_last_body_frame_tracking_ids", []),
+                    "last_body_index_frame_time": getattr(kinect, "_last_body_index_frame_time", None),
+                    "last_body_index_frame_access": getattr(kinect, "_last_body_index_frame_access", None),
+                })
+
+                submitted = False
+                if "color" not in in_flight and now - last_encoded["color"] >= intervals["color"] and kinect.has_new_color_frame():
+                    color = kinect.get_last_color_frame()
+                    if color is not None:
+                        in_flight["color"] = executor.submit(publish_color, color, color_w, color_h)
+                        submitted = True
+                    last_encoded["color"] = now
+                if "depth" not in in_flight and now - last_encoded["depth"] >= intervals["depth"] and kinect.has_new_depth_frame():
+                    depth = kinect.get_last_depth_frame()
+                    if depth is not None:
+                        in_flight["depth"] = executor.submit(publish_depth_pair, depth, depth_w, depth_h)
+                        submitted = True
+                    last_encoded["depth"] = now
+                if "infrared" not in in_flight and now - last_encoded["infrared"] >= intervals["infrared"] and kinect.has_new_infrared_frame():
+                    infrared = kinect.get_last_infrared_frame()
+                    if infrared is not None:
+                        in_flight["infrared"] = executor.submit(publish_infrared, infrared, infrared_w, infrared_h)
+                        submitted = True
+                    last_encoded["infrared"] = now
+                if "body_index" not in in_flight and now - last_encoded["body_index"] >= intervals["body_index"] and kinect.has_new_body_index_frame():
+                    body_index = kinect.get_last_body_index_frame()
+                    if body_index is not None:
+                        in_flight["body_index"] = executor.submit(publish_body_index, body_index, depth_w, depth_h)
+                        submitted = True
+                    last_encoded["body_index"] = now
+                if "body" not in in_flight and now - last_encoded["body"] >= intervals["body"]:
+                    if kinect.has_new_body_frame():
+                        bodies = kinect.get_last_body_frame()
+                        if bodies is not None:
+                            in_flight["body"] = executor.submit(publish_skeleton, bodies, kinect, depth_w, depth_h)
+                            submitted = True
+                        elif STATE.get_jpeg("skeleton") is None:
+                            in_flight["body"] = executor.submit(
+                                publish_skeleton_status,
+                                "KINECT SKELETON",
+                                "No body frame received yet.",
+                                depth_w,
+                                depth_h,
+                            )
+                            submitted = True
                     elif STATE.get_jpeg("skeleton") is None:
-                        skeleton = skeleton_status_jpeg("KINECT SKELETON", "No body frame received yet.", depth_w, depth_h)
-                        STATE.set_jpeg("skeleton", skeleton)
-                elif STATE.get_jpeg("skeleton") is None:
-                    skeleton = skeleton_status_jpeg("KINECT SKELETON", "Waiting for body tracking frames.", depth_w, depth_h)
-                    STATE.set_jpeg("skeleton", skeleton)
-                last_encoded["body"] = now
-                updated = True
-            if updated:
-                STATE.frames += 1
-                STATE.note = "Kinect frames online"
-            else:
-                if STATE.frames <= 0:
-                    STATE.note = "Waiting for Kinect frames"
-                elif not sensor_available:
-                    STATE.note = "Kinect sensor unavailable"
-                else:
+                        in_flight["body"] = executor.submit(
+                            publish_skeleton_status,
+                            "KINECT SKELETON",
+                            "Waiting for body tracking frames.",
+                            depth_w,
+                            depth_h,
+                        )
+                        submitted = True
+                    last_encoded["body"] = now
+
+                if completed or submitted:
+                    STATE.frames += completed
                     STATE.note = "Kinect frames online"
-                time.sleep(0.01)
+                else:
+                    if STATE.frames <= 0:
+                        STATE.note = "Waiting for Kinect frames"
+                    elif not sensor_available:
+                        STATE.note = "Kinect sensor unavailable"
+                    else:
+                        STATE.note = "Kinect frames online"
+                    time.sleep(0.002)
     except Exception as exc:
         STATE.last_error = repr(exc)
         STATE.note = f"Kinect capture failed: {exc}"
@@ -530,6 +617,7 @@ class Handler(BaseHTTPRequestHandler):
                 "note": STATE.note,
                 "last_error": STATE.last_error,
                 "diagnostics": STATE.diagnostics,
+                "streams": STATE.stream_stats(),
             }
             self._send(json.dumps(payload).encode("utf-8"), "application/json")
             return
