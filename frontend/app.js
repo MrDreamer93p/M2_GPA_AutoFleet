@@ -34,16 +34,50 @@ const networkMetricSelect = document.getElementById("networkMetricSelect");
 const videoQualitySelect = document.getElementById("videoQualitySelect");
 const applyVideoQualityBtn = document.getElementById("applyVideoQualityBtn");
 const videoQualityStatus = document.getElementById("videoQualityStatus");
+const vehicleSourceSelect = document.getElementById("vehicleSourceSelect");
+const vehicleCountSelect = document.getElementById("vehicleCountSelect");
+const vehicleSimulationToggleBtn = document.getElementById("vehicleSimulationToggleBtn");
 const MAX_NETWORK_POINTS = 120;
 const MAX_DIAG_POINTS = 240;
 const PREFERRED_KINECT_STREAM_KEYS = ["color", "rgb", "rgb_color", "depth", "distance", "infrared", "ir", "body_index", "skeleton", "body", "pose", "ir2", "default"];
 const PREFERRED_VEHICLE_STREAM_KEYS = ["color", "rgb", "rgb_color", "default", "front", "camera", "depth", "pose"];
+const DEMO_VEHICLE_VIDEO_SOURCES = [
+  "./assets/highway-forward.mp4",
+  "../data/artifacts/demo/highway-forward.mp4",
+  "/data/artifacts/demo/highway-forward.mp4",
+];
+const DEMO_VEHICLE_UNIQUE_SOURCE_COUNT = 1;
+const DEFAULT_VEHICLE_COUNT = 3;
+const VEHICLE_SIM_SCENARIOS = {
+  aligned: {
+    label: "Aligned Perception",
+    mode: "synthetic",
+    note: "State-aligned synthetic perception scene.",
+  },
+  highway: {
+    label: "Highway Clip + Overlay",
+    mode: "video",
+    note: "Browser-playable highway mp4 with YOLO vehicle tracks rendered frame by frame.",
+  },
+  mtid: {
+    label: "MTID Multiview Dataset",
+    mode: "video",
+    note: "Real MTID multi-view clips; each robot card uses its own video file and track JSON.",
+  },
+};
+const HIGHWAY_TRACKS_URL = "./assets/highway-vehicle-tracks.json";
+const MULTIVIEW_MANIFEST_URL = "./assets/vehicle-multiview.json";
+const DETECTOR_MIN_CONFIDENCE = 0.35;
+const DETECTOR_MIN_AREA = 900;
+const DETECTOR_MAX_RENDERED = 6;
 
 const viewControlBtn = document.getElementById("viewControlBtn");
 const viewDiagnosticsBtn = document.getElementById("viewDiagnosticsBtn");
 const diagSnapshotBtn = document.getElementById("diagSnapshotBtn");
 const diagStressBtn = document.getElementById("diagStressBtn");
 const diagVideoRobotCount = document.getElementById("diagVideoRobotCount");
+const vehicleScenarioSelect = document.getElementById("vehicleScenarioSelect");
+const vehicleSimulationBtn = document.getElementById("vehicleSimulationBtn");
 const diagStopBtn = document.getElementById("diagStopBtn");
 const diagStatus = document.getElementById("diagStatus");
 const diagChart = document.getElementById("diagChart");
@@ -73,13 +107,25 @@ let lastDiagSnapshot = null;
 let diagTimer = null;
 let diagTickInFlight = false;
 let stressTimer = null;
+let riskAnimationTimer = null;
+let vehicleTrackRaf = null;
 let videoWallRenderKey = "";
 let kinectStageRenderKey = "";
 let videoSettingsCache = null;
+let highwayVehicleTracks = null;
+let highwayTracksPromise = null;
+let vehicleMultiviewManifest = null;
+let vehicleMultiviewPromise = null;
+const vehicleTracksByUrl = new Map();
+const vehicleTrackPromises = new Map();
 let selectedStreamsByRobot = {};
+const highwayPerceptionByRobot = new Map();
+const spatialObstacleMemory = new Map();
 let selectedKinectRobotId = localStorage.getItem("autofleet_kinect_robot") || "";
 let selectedKinectStream = localStorage.getItem("autofleet_kinect_stream") || "";
 let kinectFullscreenOverlay = null;
+let vehicleSimulationMode = localStorage.getItem("autofleet_vehicle_simulation") === "on";
+let vehicleSimulationScenario = localStorage.getItem("autofleet_vehicle_simulation_scenario") || "aligned";
 const stressState = {
   running: false,
   startedAt: 0,
@@ -345,6 +391,733 @@ function getRobotSelectedStream(robot, preferredKeys = PREFERRED_VEHICLE_STREAM_
   return fallback;
 }
 
+function demoVehicleCount() {
+  const fromMain = Number(localStorage.getItem("autofleet_vehicle_count") || vehicleCountSelect?.value || DEFAULT_VEHICLE_COUNT);
+  const fromDiag = Number(diagVideoRobotCount?.value || DEFAULT_VEHICLE_COUNT);
+  const selected = Number.isFinite(fromMain) ? fromMain : fromDiag;
+  return Math.max(1, Math.min(4, Number.isFinite(selected) ? selected : DEFAULT_VEHICLE_COUNT));
+}
+
+function normalizeVehicleScenario(value) {
+  return Object.prototype.hasOwnProperty.call(VEHICLE_SIM_SCENARIOS, value) ? value : "aligned";
+}
+
+function currentVehicleScenario() {
+  return VEHICLE_SIM_SCENARIOS[normalizeVehicleScenario(vehicleSimulationScenario)] || VEHICLE_SIM_SCENARIOS.aligned;
+}
+
+function isDetectorVehicleScenario() {
+  return ["highway", "mtid"].includes(normalizeVehicleScenario(vehicleSimulationScenario));
+}
+
+function multiviewViews() {
+  return Array.isArray(vehicleMultiviewManifest?.views) ? vehicleMultiviewManifest.views : [];
+}
+
+function multiviewViewForIndex(idx) {
+  const views = multiviewViews();
+  return views[idx] || null;
+}
+
+function multiviewViewForRobot(robotId) {
+  const id = String(robotId || "");
+  return multiviewViews().find((view) => String(view.robot_id || "") === id) || null;
+}
+
+async function loadVehicleMultiviewManifest() {
+  if (vehicleMultiviewManifest) return vehicleMultiviewManifest;
+  if (!vehicleMultiviewPromise) {
+    vehicleMultiviewPromise = fetch(`${MULTIVIEW_MANIFEST_URL}?v=20260618-mtid-v1`, { cache: "force-cache" })
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data) => {
+        vehicleMultiviewManifest = data;
+        return data;
+      })
+      .catch((err) => {
+        vehicleMultiviewPromise = null;
+        throw err;
+      });
+  }
+  return vehicleMultiviewPromise;
+}
+
+function vehicleTrackCacheKey(url) {
+  return String(url || "").trim();
+}
+
+async function loadVehicleTrackSet(url) {
+  const key = vehicleTrackCacheKey(url || HIGHWAY_TRACKS_URL);
+  if (!key) throw new Error("missing vehicle track URL");
+  if (vehicleTracksByUrl.has(key)) return vehicleTracksByUrl.get(key);
+  if (!vehicleTrackPromises.has(key)) {
+    const promise = fetch(`${key}${key.includes("?") ? "&" : "?"}v=20260618-tracks-v2`, { cache: "force-cache" })
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data) => {
+        vehicleTracksByUrl.set(key, data);
+        return data;
+      })
+      .catch((err) => {
+        vehicleTrackPromises.delete(key);
+        throw err;
+      });
+    vehicleTrackPromises.set(key, promise);
+  }
+  return vehicleTrackPromises.get(key);
+}
+
+function simulationVehicleProfile(idx) {
+  const profiles = [
+    {
+      cameraMode: "front",
+      cameraLabel: "front camera",
+      row: "front row",
+      lane: "left",
+      role: "leader",
+      baseX: 0.9,
+      baseY: 1.05,
+      label: "lead vehicle",
+    },
+    {
+      cameraMode: "front",
+      cameraLabel: "front camera",
+      row: "front row",
+      lane: "right",
+      role: "front wing",
+      baseX: 0.42,
+      baseY: -1.05,
+      label: "right-lane vehicle",
+    },
+    {
+      cameraMode: "front",
+      cameraLabel: "rear guard camera",
+      row: "rear guard",
+      lane: "center",
+      role: "rear guard",
+      baseX: -1.85,
+      baseY: 0.1,
+      label: "rear guard vehicle",
+    },
+    {
+      cameraMode: "front",
+      cameraLabel: "support camera",
+      row: "support row",
+      lane: "right",
+      role: "support",
+      baseX: -2.35,
+      baseY: -1.15,
+      label: "support vehicle",
+    },
+  ];
+  return profiles[idx % profiles.length];
+}
+
+function sharedSimulationObstacle(phase, scenarioKey = vehicleSimulationScenario) {
+  if (scenarioKey === "highway") {
+    return {
+      id: "shared-right-vehicle",
+      x: -0.28 + Math.sin(phase * 0.75) * 0.1,
+      y: -1.74 + Math.cos(phase * 0.65) * 0.08,
+      label: "right-side vehicle",
+      confidence: 0.86,
+      risk_level: "HIGH",
+      source_idx: 0,
+    };
+  }
+  return {
+    id: "shared-left-obstacle",
+    x: -0.65 + Math.sin(phase * 0.85) * 0.12,
+    y: 1.78 + Math.cos(phase * 0.7) * 0.1,
+    label: "shared left obstacle",
+    confidence: 0.84,
+    risk_level: "HIGH",
+    source_idx: 0,
+  };
+}
+
+function simulationRobotRisk(profile, distance, lateralDistance, scenarioKey = vehicleSimulationScenario) {
+  const hotLane = scenarioKey === "highway" ? "right" : "left";
+  if (profile.lane === hotLane && distance < 1.75) return "CRITICAL";
+  if (profile.lane === hotLane && distance < 2.6) return "HIGH";
+  if (lateralDistance < 2.2 && distance < 3.4) return "MEDIUM";
+  return "LOW";
+}
+
+function buildSimulationVehicles(existingItems) {
+  if (!vehicleSimulationMode) return existingItems;
+  const now = Date.now() / 1000;
+  const phase = now * 0.75;
+  const scenarioKey = normalizeVehicleScenario(vehicleSimulationScenario);
+  if (scenarioKey === "mtid") {
+    const scenario = currentVehicleScenario();
+    const views = multiviewViews();
+    const count = views.length ? Math.min(demoVehicleCount(), views.length) : demoVehicleCount();
+    return Array.from({ length: count }, (_, idx) => {
+      const view = multiviewViewForIndex(idx);
+      const robotId = view?.robot_id || `R${idx + 1}`;
+      const profile = simulationVehicleProfile(idx);
+      const x = profile.baseX + idx * 0.34 + Math.sin(phase + idx * 0.62) * 0.08;
+      const y = profile.baseY + Math.cos(phase * 0.55 + idx) * 0.1;
+      const perception = highwayPerceptionByRobot.get(String(robotId));
+      const obstacleCount = perception?.obstacles?.length || 0;
+      const risk = highestRiskFromObstacles(perception?.obstacles || []) || "LOW";
+      return {
+        robot_id: robotId,
+        online: true,
+        state: "SIMULATION",
+        battery: 0.82 - idx * 0.04,
+        last_seen_age_s: 0,
+        pose: { x, y, yaw: Math.sin(phase * 0.46 + idx) * 0.07 },
+        controls: { linear_x: 0, angular_z: 0 },
+        motors: { left_rpm: 0, right_rpm: 0 },
+        latest_ack: { status: "simulated" },
+        video_rtsp_url: view?.video_url || "simulation://mtid-missing",
+        video_status: {
+          status: view ? "online" : "missing",
+          source_url: view?.video_url || "",
+          track_url: view?.tracks_url || "",
+          source_type: view?.source_type || "mtid-missing",
+          view_profile: view?.label || "MTID view missing",
+          camera_label: view?.camera_label || "MTID CAMERA",
+          camera_mode: "front",
+          sync_group: view?.sync_group || "missing",
+          row: view?.role || profile.row,
+          sim_source: scenario.label,
+          note: view
+            ? `${view.label}; independent ${view.source_type || "track"} file. ${vehicleMultiviewManifest?.note || ""}`
+            : "MTID manifest is not loaded or this view is missing.",
+        },
+        latest_perception: {
+          obstacle_count: obstacleCount,
+          risk_level: risk,
+          detections: perception?.detections || [],
+        },
+        map_summary: {
+          obstacle_count: obstacleCount,
+          risk_level: risk,
+          obstacles: perception?.obstacles || [],
+        },
+        coordination: {
+          role: view?.role || profile.role,
+          collision_risk: risk,
+          min_peer_distance_m: idx === 0 ? 2.2 : 2.0 + idx * 0.42 + Math.cos(phase + idx) * 0.16,
+          neighbors: idx > 0 ? [{ robot_id: "R1", distance_m: 2.1 + idx * 0.42 + Math.sin(phase + idx) * 0.18, risk_level: risk }] : [],
+        },
+        sensor_summary: {
+          fusion_status: "simulation",
+          sensors: [{ sensor_type: view ? "mtid-camera" : "missing-camera", status: view ? "online" : "offline", last_update_ts: now }],
+        },
+      };
+    });
+  }
+  const sharedObstacle = sharedSimulationObstacle(phase, scenarioKey);
+  return Array.from({ length: demoVehicleCount() }, (_, idx) => {
+    const robotId = `R${idx + 1}`;
+    const profile = simulationVehicleProfile(idx);
+    const scenario = currentVehicleScenario();
+    const x = profile.baseX + Math.sin(phase + idx * 0.7) * 0.16;
+    const y = profile.baseY + Math.cos(phase * 0.8 + idx) * 0.18;
+    const distanceToShared = Math.hypot(sharedObstacle.x - x, sharedObstacle.y - y);
+    const lateralDistance = Math.abs(sharedObstacle.y - y);
+    const seesSharedObstacle = scenarioKey === "highway" ? false : profile.lane === "left";
+    const risk = scenarioKey === "highway" ? "LOW" : simulationRobotRisk(profile, distanceToShared, lateralDistance, scenarioKey);
+    const obstacle = {
+      ...sharedObstacle,
+      distance_m: distanceToShared,
+      risk_level: risk,
+      source_idx: idx,
+    };
+    const detections = seesSharedObstacle
+      ? [
+          {
+            label: obstacle.label,
+            severity: ["HIGH", "CRITICAL"].includes(risk) ? "warning" : "ok",
+            confidence: obstacle.confidence,
+            bbox: { x: 0.5, y: 0.24, w: 0.18, h: 0.22 },
+          },
+        ]
+      : [];
+    return {
+      robot_id: robotId,
+      online: true,
+      state: "SIMULATION",
+      battery: 0.82 - idx * 0.04,
+      last_seen_age_s: 0,
+      pose: { x, y, yaw: Math.sin(phase * 0.6 + idx) * 0.08 },
+      controls: { linear_x: 0, angular_z: 0 },
+      motors: { left_rpm: 0, right_rpm: 0 },
+      latest_ack: { status: "simulated" },
+      video_rtsp_url: `simulation://${vehicleSimulationScenario}`,
+      video_status: {
+        status: "online",
+        source_url: `simulation://${vehicleSimulationScenario}`,
+        view_profile: `${profile.cameraMode}_${profile.lane}`,
+        camera_mode: profile.cameraMode,
+        row: profile.row,
+        sim_source: scenario.label,
+        note: `${scenario.note} Kinect remains live on the SDK bridge.`,
+      },
+      latest_perception: {
+        obstacle_count: detections.length,
+        risk_level: risk,
+        detections,
+      },
+      map_summary: {
+        obstacle_count: detections.length,
+        risk_level: risk,
+        obstacles: seesSharedObstacle ? [obstacle] : [],
+      },
+      coordination: {
+        role: profile.role,
+        collision_risk: risk,
+        min_peer_distance_m: idx === 0 ? distanceToShared : 2.2 + idx * 0.35 + Math.cos(phase + idx) * 0.2,
+        neighbors: idx > 0 ? [{ robot_id: "R1", distance_m: 2.1 + idx * 0.4 + Math.sin(phase + idx) * 0.25, risk_level: idx === 1 ? "MEDIUM" : "LOW" }] : [],
+      },
+      sensor_summary: {
+        fusion_status: "simulation",
+        sensors: [{ sensor_type: "camera", status: "online", last_update_ts: now }],
+      },
+    };
+  });
+}
+
+function demoVehicleVideoHtml(robot, selectedStream) {
+  if (vehicleSimulationScenario === "aligned") {
+    return syntheticVehicleSceneHtml(robot, selectedStream);
+  }
+  if (vehicleSimulationScenario === "mtid") {
+    return multiviewVehicleVideoHtml(robot, selectedStream);
+  }
+  const sourceHtml = DEMO_VEHICLE_VIDEO_SOURCES.map((src) => `<source src="${escapeHtml(src)}" type="video/mp4">`).join("");
+  const cameraMode = robot.video_status?.camera_mode || (String(robot.video_status?.view_profile || "").startsWith("rear") ? "rear" : "front");
+  const cameraLabel = robot.video_status?.camera_label || (cameraMode === "rear" ? "REAR CAMERA" : "FRONT CAMERA");
+  const sharedSource = DEMO_VEHICLE_UNIQUE_SOURCE_COUNT === 1 ? `<span class="demo-video-source-badge">shared demo source</span>` : "";
+  const overlayHtml = vehicleClipOverlayHtml(robot);
+  return `
+    <div class="demo-video-shell demo-video-${escapeHtml(cameraMode)}" data-track-scenario="highway" data-track-profile="${escapeHtml(cameraMode)}">
+      <video class="demo-vehicle-video" autoplay muted loop playsinline preload="auto" data-robot-id="${escapeHtml(robot.robot_id)}" data-stream="${escapeHtml(selectedStream)}">
+        ${sourceHtml}
+      </video>
+      ${overlayHtml}
+      <span class="demo-video-badge">${escapeHtml(cameraLabel)}</span>
+      ${sharedSource}
+    </div>
+  `;
+}
+
+function multiviewVehicleVideoHtml(robot, selectedStream) {
+  const view = multiviewViewForRobot(robot.robot_id);
+  if (!view) {
+    return `
+      <div class="stream-note dataset-missing">
+        <strong>MTID view missing for ${escapeHtml(robot.robot_id)}</strong>
+        <div>Run tools/prepare_mtid_multiview_demo.py to generate per-view mp4 and tracks.</div>
+      </div>
+    `;
+  }
+  const cameraLabel = view.camera_label || "MTID CAMERA";
+  return `
+    <div class="demo-video-shell demo-video-mtid" data-track-scenario="mtid" data-track-url="${escapeHtml(view.tracks_url || "")}" data-track-profile="${escapeHtml(view.view || view.label || "")}" data-sync-group="${escapeHtml(view.sync_group || "")}">
+      <video class="demo-vehicle-video" autoplay muted loop playsinline preload="auto" data-robot-id="${escapeHtml(robot.robot_id)}" data-stream="${escapeHtml(selectedStream)}">
+        <source src="${escapeHtml(view.video_url || "")}" type="video/mp4">
+      </video>
+      ${vehicleClipOverlayHtml(robot)}
+      <span class="demo-video-badge">${escapeHtml(cameraLabel)}</span>
+      <span class="demo-video-source-badge real-source">${escapeHtml(view.sync_group || "MTID")}</span>
+    </div>
+  `;
+}
+
+function vehicleClipOverlayHtml(robot) {
+  return `
+    <div class="clip-perception-overlay" aria-label="${escapeHtml(`${robot.robot_id} perception overlay`)}">
+      <svg class="clip-detector-layer" data-detector-layer viewBox="0 0 1280 720" preserveAspectRatio="none">
+      </svg>
+      <span class="clip-overlay-note" data-detector-note>loading vehicle detector tracks</span>
+    </div>
+  `;
+}
+
+function syntheticVehicleSceneHtml(robot, selectedStream) {
+  const phase = Date.now() / 1000 * 0.75;
+  const fallbackObstacle = sharedSimulationObstacle(phase);
+  const obstacle = robot.map_summary?.obstacles?.[0] || fallbackObstacle;
+  const hasDetection = Boolean(robot.latest_perception?.detections?.length);
+  const risk = normalizedRiskLevel(obstacle.risk_level || robot.map_summary?.risk_level || highestRobotRisk(robot));
+  const distance = Number.isFinite(Number(obstacle.distance_m)) ? Number(obstacle.distance_m) : 2.1;
+  const laneOffset = (robot.video_status?.view_profile || "").includes("right") ? 42 : -42;
+  const egoY = 185 + laneOffset * 0.2;
+  const obstacleX = clamp(310 + distance * 56, 345, 545);
+  const obstacleY = 112 + Math.sin(Date.now() / 650) * 8;
+  const bboxW = risk === "LOW" ? 70 : risk === "MEDIUM" ? 86 : 98;
+  const bboxH = risk === "LOW" ? 44 : risk === "MEDIUM" ? 56 : 66;
+  const rowLabel = robot.video_status?.row || (robot.video_status?.camera_mode === "rear" ? "rear row" : "front row");
+  const cameraLabel = rowLabel.toUpperCase();
+  const label = obstacle.label || "detected object";
+  const distanceLabel = `${fmtNum(distance, 1)} m`;
+  const riskHex = riskColor(risk);
+  const laneName = (robot.video_status?.view_profile || "").includes("right") ? "right lane" : "left lane";
+  const detectionMarkup = hasDetection
+    ? `
+        <g class="synthetic-detection">
+          <rect x="${obstacleX - bboxW / 2}" y="${obstacleY - bboxH / 2}" width="${bboxW}" height="${bboxH}" fill="none" stroke="${riskHex}" stroke-width="4" />
+          <line x1="${obstacleX}" y1="${obstacleY - bboxH / 2 - 20}" x2="${obstacleX}" y2="${obstacleY + bboxH / 2 + 18}" stroke="${riskHex}" stroke-width="2" opacity="0.75" />
+          <line x1="${obstacleX - bboxW / 2 - 18}" y1="${obstacleY}" x2="${obstacleX + bboxW / 2 + 18}" y2="${obstacleY}" stroke="${riskHex}" stroke-width="2" opacity="0.75" />
+          <rect x="${obstacleX - bboxW / 2}" y="${obstacleY - bboxH / 2 - 38}" width="190" height="32" fill="rgba(0,0,0,0.78)" stroke="${riskHex}" stroke-width="2" />
+          <text x="${obstacleX - bboxW / 2 + 8}" y="${obstacleY - bboxH / 2 - 19}" fill="#fff" font-size="13" font-family="IBM Plex Mono, monospace">${escapeHtml(label)}</text>
+          <text x="${obstacleX - bboxW / 2 + 8}" y="${obstacleY - bboxH / 2 - 7}" fill="#d8d8d8" font-size="10" font-family="IBM Plex Mono, monospace">${escapeHtml(`${distanceLabel} | ${risk}`)}</text>
+        </g>
+      `
+    : `
+        <g class="synthetic-detection muted">
+          <rect x="${obstacleX - 32}" y="${obstacleY - 22}" width="64" height="44" fill="none" stroke="#777" stroke-width="2" stroke-dasharray="7 5" />
+          <line x1="${obstacleX - 48}" y1="${obstacleY}" x2="${obstacleX + 48}" y2="${obstacleY}" stroke="#777" stroke-width="1.5" stroke-dasharray="5 5" />
+          <rect x="${obstacleX - 42}" y="${obstacleY - 54}" width="210" height="28" fill="rgba(0,0,0,0.72)" stroke="#777" stroke-width="1.5" />
+          <text x="${obstacleX - 34}" y="${obstacleY - 36}" fill="#d8d8d8" font-size="12" font-family="IBM Plex Mono, monospace">shared obstacle left side</text>
+        </g>
+      `;
+  return `
+    <div class="demo-video-shell demo-video-aligned" data-robot-id="${escapeHtml(robot.robot_id)}" data-stream="${escapeHtml(selectedStream)}">
+      <svg class="synthetic-video-scene" viewBox="0 0 640 360" preserveAspectRatio="none" aria-label="${escapeHtml(`${robot.robot_id} aligned perception scene`)}">
+        <defs>
+          <linearGradient id="roadGrad-${escapeHtml(robot.robot_id)}" x1="0" x2="1" y1="0" y2="0">
+            <stop offset="0" stop-color="#151515" />
+            <stop offset="1" stop-color="#252525" />
+          </linearGradient>
+          <marker id="sceneArrow-${escapeHtml(robot.robot_id)}" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#ffffff" />
+          </marker>
+        </defs>
+        <rect width="640" height="360" fill="#060606" />
+        <rect x="0" y="62" width="640" height="236" fill="url(#roadGrad-${escapeHtml(robot.robot_id)})" />
+        <g stroke="#3d3d3d" stroke-width="2">
+          <line x1="0" y1="102" x2="640" y2="102" />
+          <line x1="0" y1="258" x2="640" y2="258" />
+          <line x1="0" y1="180" x2="640" y2="180" stroke-dasharray="28 18" stroke="#777" />
+        </g>
+        <path d="M 126 ${egoY} L 560 86 L 560 290 Z" fill="${riskHex}" opacity="0.11" stroke="${riskHex}" stroke-width="2" stroke-dasharray="7 6" />
+        <path d="M 126 ${egoY} L ${obstacleX} ${obstacleY}" fill="none" stroke="${hasDetection ? riskHex : "#777"}" stroke-width="2" stroke-dasharray="7 6" opacity="${hasDetection ? "0.9" : "0.48"}" />
+        <line x1="126" y1="${egoY}" x2="585" y2="${egoY}" stroke="#ffffff" stroke-width="2" marker-end="url(#sceneArrow-${escapeHtml(robot.robot_id)})" opacity="0.85" />
+        <g transform="translate(76 ${egoY - 27})">
+          <rect x="0" y="8" width="96" height="38" rx="4" fill="${riskHex}" stroke="#ffffff" stroke-width="3" />
+          <rect x="64" y="0" width="24" height="16" rx="3" fill="#ffffff" opacity="0.92" />
+          <circle cx="22" cy="50" r="8" fill="#0a0a0a" stroke="#ffffff" stroke-width="2" />
+          <circle cx="74" cy="50" r="8" fill="#0a0a0a" stroke="#ffffff" stroke-width="2" />
+        </g>
+        ${detectionMarkup}
+        <text x="16" y="30" fill="#ffffff" font-size="15" font-family="IBM Plex Mono, monospace">${escapeHtml(robot.robot_id)} ${escapeHtml(cameraLabel)} SCENE</text>
+        <text x="16" y="48" fill="#bdbdbd" font-size="11" font-family="IBM Plex Mono, monospace">${escapeHtml(`${laneName} | pose and obstacle shared with Spatial Risk`)}</text>
+      </svg>
+      <span class="demo-video-badge">ALIGNED SCENE</span>
+    </div>
+  `;
+}
+
+function updateVehicleSimulationButton() {
+  const label = vehicleSimulationMode ? "Vehicle Sim On (Cars)" : "Vehicle Sim Off (Live Cars)";
+  [vehicleSimulationBtn, vehicleSimulationToggleBtn].filter(Boolean).forEach((btn) => {
+    btn.textContent = label;
+    btn.classList.toggle("active", vehicleSimulationMode);
+    btn.classList.toggle("accent", vehicleSimulationMode);
+  });
+}
+
+function syncVehicleScenarioControl() {
+  vehicleSimulationScenario = normalizeVehicleScenario(vehicleSimulationScenario);
+  if (vehicleScenarioSelect) {
+    vehicleScenarioSelect.value = vehicleSimulationScenario;
+  }
+  if (vehicleSourceSelect) {
+    vehicleSourceSelect.value = vehicleSimulationScenario;
+  }
+}
+
+function syncVehicleCountControls() {
+  const count = demoVehicleCount();
+  if (vehicleCountSelect) vehicleCountSelect.value = String(count);
+  if (diagVideoRobotCount) diagVideoRobotCount.value = String(count);
+  stressState.vehicle_count = count;
+}
+
+function applyVehicleScenario(value, { enableSimulation = true, announce = true } = {}) {
+  vehicleSimulationScenario = normalizeVehicleScenario(value);
+  localStorage.setItem("autofleet_vehicle_simulation_scenario", vehicleSimulationScenario);
+  if (enableSimulation) {
+    vehicleSimulationMode = true;
+    localStorage.setItem("autofleet_vehicle_simulation", "on");
+  }
+  syncVehicleScenarioControl();
+  updateVehicleSimulationButton();
+  resetRiskAnimation();
+  videoWallRenderKey = "";
+  renderVideoWall(robotsCache);
+  renderRiskMap(robotsCache);
+  renderMapSummaryGrid(robotsCache);
+  resetVehicleTrackLoop();
+  if (announce) {
+    const scenario = currentVehicleScenario();
+    setDiagStatus(`${scenario.label} selected for vehicle simulation. Kinect Studio stays on live SDK streams.`);
+    if (videoQualityStatus) {
+      videoQualityStatus.textContent = vehicleSimulationMode
+        ? `Vehicle sim: ${scenario.label}`
+        : "Browser-playable streams";
+    }
+  }
+  if (vehicleSimulationScenario === "mtid") {
+    loadVehicleMultiviewManifest()
+      .then(() => {
+        videoWallRenderKey = "";
+        renderVideoWall(robotsCache);
+        renderRiskMap(robotsCache);
+        renderMapSummaryGrid(robotsCache);
+        resetVehicleTrackLoop();
+      })
+      .catch((err) => {
+        setDiagStatus(`MTID manifest unavailable: ${String(err.message || err)}`);
+      });
+  }
+}
+
+async function loadHighwayVehicleTracks() {
+  if (highwayVehicleTracks) return highwayVehicleTracks;
+  if (!highwayTracksPromise) {
+    highwayTracksPromise = loadVehicleTrackSet(HIGHWAY_TRACKS_URL)
+      .then((data) => {
+        highwayVehicleTracks = data;
+        return data;
+      });
+  }
+  return highwayTracksPromise;
+}
+
+function detectorFrameForTime(tracks, rawTime) {
+  if (!tracks?.frames?.length) return null;
+  const fps = Number(tracks.fps || 24);
+  const duration = tracks.frames.length / Math.max(1, fps);
+  const time = ((Number(rawTime) || 0) % duration + duration) % duration;
+  const idx = clamp(Math.round(time * fps), 0, tracks.frames.length - 1);
+  return tracks.frames[idx] || null;
+}
+
+function detectionColor(index) {
+  return ["#90d8ff", "#ff6ea8", "#ff9a4d", "#ffd95b", "#7eff96"][index % 5];
+}
+
+function detectorDetectionsForFrame(frame) {
+  return (frame?.detections || [])
+    .filter((det) => Array.isArray(det.bbox) && det.bbox.length === 4)
+    .filter((det) => {
+      const [, , w, h] = det.bbox.map(Number);
+      return Number(det.confidence || 0) >= DETECTOR_MIN_CONFIDENCE && w * h >= DETECTOR_MIN_AREA;
+    })
+    .sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0))
+    .slice(0, DETECTOR_MAX_RENDERED);
+}
+
+function detectorSvgForFrame(frame, robotId) {
+  const detections = detectorDetectionsForFrame(frame);
+  if (!detections.length) return "";
+  return detections
+    .map((det, idx) => {
+      const [x, y, w, h] = det.bbox.map(Number);
+      const color = detectionColor(Number(det.track_id || idx));
+      const label = `${String(det.label || "vehicle").toUpperCase()} T${det.track_id || "?"}`;
+      const confidence = `${Math.round(Number(det.confidence || 0) * 100)}%`;
+      const tx = Math.max(4, Math.min(1160, x));
+      const ty = Math.max(18, y - 10);
+      const cx = x + w / 2;
+      const cy = y + h / 2;
+      const corner = Math.max(18, Math.min(44, Math.min(w, h) * 0.32));
+      return `
+        <g class="clip-real-detection" data-track-id="${escapeHtml(det.track_id || "")}">
+          <rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="${color}" stroke-width="4" />
+          <path d="M ${x} ${y + corner} L ${x} ${y} L ${x + corner} ${y}
+                   M ${x + w - corner} ${y} L ${x + w} ${y} L ${x + w} ${y + corner}
+                   M ${x + w} ${y + h - corner} L ${x + w} ${y + h} L ${x + w - corner} ${y + h}
+                   M ${x + corner} ${y + h} L ${x} ${y + h} L ${x} ${y + h - corner}"
+                fill="none" stroke="${color}" stroke-width="8" stroke-linecap="square" />
+          <line x1="${cx}" y1="${cy - 18}" x2="${cx}" y2="${cy + 18}" stroke="${color}" stroke-width="3" opacity="0.9" />
+          <line x1="${cx - 18}" y1="${cy}" x2="${cx + 18}" y2="${cy}" stroke="${color}" stroke-width="3" opacity="0.9" />
+          <rect x="${tx}" y="${ty - 24}" width="170" height="24" fill="rgba(0,0,0,0.72)" stroke="${color}" stroke-width="2" />
+          <text x="${tx + 7}" y="${ty - 8}" fill="#fff" font-size="17" font-family="IBM Plex Mono, monospace">${escapeHtml(label)} ${escapeHtml(confidence)}</text>
+        </g>
+      `;
+    })
+    .join("");
+}
+
+function videoDetectionsToSpatialObstacles(robot, detections, frame, tracks) {
+  const pose = robot.pose || {};
+  const yaw = Number(pose.yaw || 0);
+  const originX = Number(pose.x || 0);
+  const originY = Number(pose.y || 0);
+  const trackWidth = Number(tracks?.width || 1280);
+  const trackHeight = Number(tracks?.height || 720);
+  const heightScale = trackHeight / 720;
+  return detections.map((det, idx) => {
+    const [x, y, w, h] = det.bbox.map(Number);
+    const centerNorm = (x + w / 2) / Math.max(1, trackWidth);
+    const lateralM = (centerNorm - 0.5) * 4.8;
+    const rawDistanceM = clamp(8.2 - h / Math.max(1, 26 * heightScale), 0.9, 8.0);
+    const rawWorldX = originX + Math.cos(yaw) * rawDistanceM - Math.sin(yaw) * lateralM;
+    const rawWorldY = originY + Math.sin(yaw) * rawDistanceM + Math.cos(yaw) * lateralM;
+    const stableId = `${robot.video_status?.source_url || "video"}:yolo:${det.track_id || `${det.label || "vehicle"}:${idx}`}`;
+    const previous = spatialObstacleMemory.get(stableId);
+    const alpha = previous ? 0.24 : 1;
+    const worldX = previous ? previous.x + (rawWorldX - previous.x) * alpha : rawWorldX;
+    const worldY = previous ? previous.y + (rawWorldY - previous.y) * alpha : rawWorldY;
+    const distanceM = previous ? previous.distance_m + (rawDistanceM - previous.distance_m) * alpha : rawDistanceM;
+    const smoothed = {
+      x: worldX,
+      y: worldY,
+      distance_m: distanceM,
+      updated_at: performance.now(),
+    };
+    spatialObstacleMemory.set(stableId, smoothed);
+    const risk = distanceM < 1.8 ? "CRITICAL" : distanceM < 2.8 ? "HIGH" : distanceM < 4.2 ? "MEDIUM" : "LOW";
+    return {
+      id: stableId,
+      label: `${det.label || "vehicle"} T${det.track_id || idx}`,
+      x: worldX,
+      y: worldY,
+      distance_m: distanceM,
+      lateral_m: lateralM,
+      confidence: det.confidence,
+      risk_level: risk,
+      source_idx: idx,
+      source: "video-yolo",
+      source_url: robot.video_status?.source_url || "",
+      frame: frame?.frame ?? null,
+      bbox: det.bbox,
+    };
+  });
+}
+
+function highwayPerceptionForRobot(robot) {
+  return highwayPerceptionByRobot.get(String(robot.robot_id || "")) || { detections: [], frame: null, obstacles: [] };
+}
+
+function usesSharedHighwayDemoSource() {
+  return vehicleSimulationMode && vehicleSimulationScenario === "highway" && DEMO_VEHICLE_UNIQUE_SOURCE_COUNT === 1;
+}
+
+function updateHighwayTrackOverlays() {
+  const shells = [...document.querySelectorAll(".demo-video-shell[data-track-scenario]")];
+  const primaryVideo = usesSharedHighwayDemoSource() ? shells[0]?.querySelector("video") : null;
+  const sharedTime = primaryVideo ? primaryVideo.currentTime || 0 : null;
+  shells.forEach((shell) => {
+    const video = shell.querySelector("video");
+    const layer = shell.querySelector("[data-detector-layer]");
+    const note = shell.querySelector("[data-detector-note]");
+    const card = shell.closest(".video-card");
+    const perceptionMeta = card?.querySelector("[data-detector-perception]");
+    const obstaclesMeta = card?.querySelector("[data-detector-obstacles]");
+    const detectorFlag = card?.querySelector("[data-detector-flag]");
+    if (!video || !layer) return;
+    const trackUrl = shell.dataset.trackUrl || HIGHWAY_TRACKS_URL;
+    if (sharedTime !== null && shell.dataset.trackScenario === "highway" && video !== primaryVideo && Math.abs((video.currentTime || 0) - sharedTime) > 0.12) {
+      video.currentTime = sharedTime;
+    }
+    const tracks = vehicleTracksByUrl.get(vehicleTrackCacheKey(trackUrl));
+    if (!tracks) {
+      loadVehicleTrackSet(trackUrl)
+        .then((loaded) => {
+          if (trackUrl === HIGHWAY_TRACKS_URL) highwayVehicleTracks = loaded;
+          updateHighwayTrackOverlays();
+          renderRiskMap(robotsCache);
+          renderMapSummaryGrid(robotsCache);
+        })
+        .catch((err) => {
+          if (note) note.textContent = `detector tracks unavailable: ${String(err.message || err)}`;
+          if (perceptionMeta) perceptionMeta.textContent = "track file unavailable";
+          if (obstaclesMeta) obstaclesMeta.textContent = "0 / missing tracks";
+          if (detectorFlag) detectorFlag.textContent = "tracks missing";
+        });
+      if (note) note.textContent = "loading vehicle detector tracks";
+      if (perceptionMeta) perceptionMeta.textContent = "loading per-view vehicle tracks";
+      if (obstaclesMeta) obstaclesMeta.textContent = "0 / frame -";
+      if (detectorFlag) detectorFlag.textContent = "detector loading";
+      return;
+    }
+    layer.setAttribute("viewBox", `0 0 ${Number(tracks.width || 1280)} ${Number(tracks.height || 720)}`);
+    const frame = detectorFrameForTime(tracks, sharedTime !== null ? sharedTime : video.currentTime || 0);
+    const frameIndex = `${trackUrl}:${String(frame?.frame ?? "")}`;
+    if (layer.dataset.frame === frameIndex) return;
+    layer.dataset.frame = frameIndex;
+    const detections = detectorDetectionsForFrame(frame);
+    const robotId = video.dataset.robotId || "";
+    const robot = buildSimulationVehicles(robotsCache.filter((item) => !isKinectRobot(item))).find(
+      (item) => String(item.robot_id || "") === String(robotId)
+    );
+    if (robot) {
+      highwayPerceptionByRobot.set(String(robot.robot_id), {
+        frame,
+        detections,
+        obstacles: videoDetectionsToSpatialObstacles(robot, detections, frame, tracks),
+      });
+    }
+    const svg = detectorSvgForFrame(frame, video.dataset.robotId || "");
+    layer.innerHTML = svg;
+    if (note) {
+      const count = detections.length;
+      note.textContent = count ? `${count} detected vehicle(s) | frame ${frame.frame}` : `no vehicle detected | frame ${frame?.frame ?? "-"}`;
+      note.classList.toggle("is-empty", !count);
+    }
+    if (perceptionMeta) {
+      perceptionMeta.textContent = detections.length
+        ? `${detections.length} vehicle track(s)`
+        : "no vehicle in this frame";
+    }
+    if (obstaclesMeta) {
+      obstaclesMeta.textContent = `${detections.length} / frame ${frame?.frame ?? "-"}`;
+    }
+    if (detectorFlag) {
+      detectorFlag.textContent = detections.length ? `track lock ${detections.length}` : "no vehicle lock";
+      detectorFlag.className = `flag-pill ${detections.length ? "warning" : "ok"}`;
+    }
+  });
+}
+
+function resetVehicleTrackLoop() {
+  if (vehicleTrackRaf) {
+    cancelAnimationFrame(vehicleTrackRaf);
+    vehicleTrackRaf = null;
+  }
+  if (!vehicleSimulationMode || !isDetectorVehicleScenario()) return;
+  const preload =
+    vehicleSimulationScenario === "mtid"
+      ? loadVehicleMultiviewManifest().then((manifest) => Promise.all((manifest.views || []).map((view) => loadVehicleTrackSet(view.tracks_url))))
+      : loadHighwayVehicleTracks();
+  preload
+    .then(() => updateHighwayTrackOverlays())
+    .catch((err) => {
+      console.warn("Vehicle detector tracks unavailable", err);
+    });
+  const tick = () => {
+    updateHighwayTrackOverlays();
+    vehicleTrackRaf = requestAnimationFrame(tick);
+  };
+  vehicleTrackRaf = requestAnimationFrame(tick);
+}
+
+function resetRiskAnimation() {
+  if (riskAnimationTimer) {
+    clearInterval(riskAnimationTimer);
+    riskAnimationTimer = null;
+  }
+  if (vehicleSimulationMode) {
+    riskAnimationTimer = setInterval(() => {
+      renderRiskMap(robotsCache);
+      renderMapSummaryGrid(robotsCache);
+    }, 250);
+  }
+}
+
 function streamSelectorHtml(robot, options, className = "video-stream-select") {
   if (!options.length || options.length <= 1) return "";
   const selected = className === "kinect-stream-select"
@@ -538,6 +1311,15 @@ function severityClass(level) {
 function highestRobotRisk(robot) {
   const alertSeverity = (robot.recent_alerts || []).some((x) => x.severity === "critical") ? "CRITICAL" : null;
   return alertSeverity || robot.latest_perception?.risk_level || robot.map_summary?.risk_level || robot.coordination?.collision_risk || "NONE";
+}
+
+function normalizedRiskLevel(level) {
+  const value = String(level || "NONE").toUpperCase();
+  return ["LOW", "MEDIUM", "HIGH", "CRITICAL"].includes(value) ? value : "NONE";
+}
+
+function riskRank(level) {
+  return { NONE: 0, LOW: 1, MEDIUM: 2, HIGH: 3, CRITICAL: 4 }[normalizedRiskLevel(level)] || 0;
 }
 
 function setApiBase(nextValue, { pinned = true } = {}) {
@@ -855,10 +1637,11 @@ function renderKinectStage(items) {
 }
 
 function renderVideoWall(items) {
-  const vehicleItems = items.filter((robot) => !isKinectRobot(robot));
+  const vehicleItems = buildSimulationVehicles(items.filter((robot) => !isKinectRobot(robot)));
   if (!vehicleItems.length) {
     videoWallRenderKey = "";
     videoWall.innerHTML = `<div class="video-empty">No connected vehicle robots yet. Publish Raspberry Pi telemetry to see vehicle streams.</div>`;
+    resetVehicleTrackLoop();
     return;
   }
 
@@ -873,6 +1656,8 @@ function renderVideoWall(items) {
         robot.video_status?.proxy_url || "",
         robot.video_status?.snapshot_url || "",
         robot.video_rtsp_url || "",
+        vehicleSimulationMode ? "simulation" : "live",
+        vehicleSimulationScenario,
       ].join("|")
     )
     .join(";");
@@ -895,17 +1680,25 @@ function renderVideoWall(items) {
       const detections = robot.latest_perception?.detections || [];
       const sensorSummary = formatSensorSummary(robot.sensor_summary);
       const risk = highestRobotRisk(robot);
-      const streamState = robot.video_status?.status || "offline";
-      const flags = [
-        `<span class="flag-pill ${severityClass(streamState === "online" ? "ok" : "warning")}">stream ${escapeHtml(streamState)}</span>`,
-        `<span class="flag-pill ${severityClass(risk)}">risk ${escapeHtml(risk)}</span>`,
-      ]
-        .concat(
-          detections.slice(0, 3).map(
-            (d) => `<span class="flag-pill ${severityClass(d.severity)}">${escapeHtml(d.label)}</span>`
-          )
-        )
-        .join("");
+      const streamState = vehicleSimulationMode ? "simulation" : robot.video_status?.status || "offline";
+      const detectorDriven = vehicleSimulationMode && isDetectorVehicleScenario();
+      const flags = detectorDriven
+        ? [
+            `<span class="flag-pill ${severityClass(streamState === "online" || streamState === "simulation" ? "ok" : "warning")}">stream ${escapeHtml(streamState)}</span>`,
+            usesSharedHighwayDemoSource() ? `<span class="flag-pill warning">shared source</span>` : "",
+            vehicleSimulationScenario === "mtid" ? `<span class="flag-pill ok">real multiview</span>` : "",
+            `<span class="flag-pill ok" data-detector-flag>detector loading</span>`,
+          ].filter(Boolean).join("")
+        : [
+            `<span class="flag-pill ${severityClass(streamState === "online" || streamState === "simulation" ? "ok" : "warning")}">stream ${escapeHtml(streamState)}</span>`,
+            `<span class="flag-pill ${severityClass(risk)}">risk ${escapeHtml(risk)}</span>`,
+          ]
+            .concat(
+              detections.slice(0, 3).map(
+                (d) => `<span class="flag-pill ${severityClass(d.severity)}">${escapeHtml(d.label)}</span>`
+              )
+            )
+            .join("");
       return `
       <article class="video-card" data-robot-id="${escapeHtml(
         robot.robot_id
@@ -928,14 +1721,20 @@ function renderVideoWall(items) {
           <div class="meta-item"><span class="meta-key">Latency / Jitter</span>${escapeHtml(`${fmtNum(sample.latency_ms, 1)}ms / ${fmtNum(sample.jitter_ms, 1)}ms`)}</div>
           <div class="meta-item"><span class="meta-key">Throughput / RTT</span>${escapeHtml(`${formatRateKbS(sample.throughput_kb_s)} / ${fmtNum(sample.control_rtt_ms, 1)}ms`)}</div>
           <div class="meta-item"><span class="meta-key">View Profile</span>${escapeHtml(robot.video_status?.view_profile || robot.video_view_profile || "-")}</div>
-          <div class="meta-item"><span class="meta-key">Perception</span>${escapeHtml(detections.length ? detections.map((d) => d.label).join(", ") : "no detection")}</div>
+          <div class="meta-item"><span class="meta-key">Perception</span><span data-detector-perception>${escapeHtml(
+            detectorDriven ? "loading per-view vehicle tracks" : detections.length ? detections.map((d) => d.label).join(", ") : "no detection"
+          )}</span></div>
           <div class="meta-item"><span class="meta-key">Sensors</span>${escapeHtml(sensorSummary)}</div>
-          <div class="meta-item"><span class="meta-key">Obstacles / Stream</span>${escapeHtml(`${robot.latest_perception?.obstacle_count ?? 0} / ${streamState}`)}</div>
+          <div class="meta-item"><span class="meta-key">Obstacles / Stream</span><span data-detector-obstacles>${escapeHtml(
+            detectorDriven ? `0 / frame -` : `${robot.latest_perception?.obstacle_count ?? 0} / ${streamState}`
+          )}</span></div>
         </div>
         <div class="video-flags">${flags}</div>
       </article>`;
     })
     .join("");
+  updateHighwayTrackOverlays();
+  resetVehicleTrackLoop();
 }
 
 function formatSensorSummary(summary) {
@@ -948,6 +1747,9 @@ function formatSensorSummary(summary) {
 }
 
 function buildStreamView(robot, selectedStream) {
+  if (vehicleSimulationMode && !isKinectRobot(robot)) {
+    return demoVehicleVideoHtml(robot, selectedStream);
+  }
   const proxyUrl = resolveStreamUrl(robot.video_status?.proxy_url || "");
   const hasRegisteredStream = Boolean(getRobotStreamMap(robot)[normalizeStreamKey(selectedStream)] || robot.video_rtsp_url);
   const snapshotUrl = robot.video_status?.snapshot_url || "";
@@ -1250,20 +2052,30 @@ function renderFleetOverview(items) {
 
 function renderMapSummaryGrid(items) {
   if (!mapSummaryGrid) return;
-  if (!items.length) {
+  const vehicles = buildSimulationVehicles(items.filter((robot) => !isKinectRobot(robot)));
+  if (!vehicles.length) {
     mapSummaryGrid.innerHTML = "";
     return;
   }
-  mapSummaryGrid.innerHTML = items
-    .map((robot) => {
+  mapSummaryGrid.innerHTML = vehicles
+    .map((robot, idx) => {
       const map = robot.map_summary || {};
       const coord = robot.coordination || {};
+      const highwayPerception = vehicleSimulationMode && isDetectorVehicleScenario() ? highwayPerceptionForRobot(robot) : null;
+      const sharedSecondary = usesSharedHighwayDemoSource() && idx > 0;
+      const obstacleCount = highwayPerception && !sharedSecondary ? highwayPerception.obstacles.length : sharedSecondary ? 0 : map.obstacle_count ?? 0;
+      const mapRisk = highwayPerception && !sharedSecondary ? highestRiskFromObstacles(highwayPerception.obstacles) : sharedSecondary ? "SHARED" : map.risk_level || "NONE";
+      const sourceLabel = highwayPerception
+        ? sharedSecondary
+          ? "same demo source as R1"
+          : `frame ${highwayPerception.frame?.frame ?? "-"}`
+        : `role ${coord.role || "independent"}`;
       return `
         <div class="summary-card">
           <span>${escapeHtml(robot.robot_id)}</span>
-          <strong>${escapeHtml(map.obstacle_count ?? 0)} obstacle(s)</strong>
-          <div>${escapeHtml(`map risk ${map.risk_level || "NONE"}`)}</div>
-          <div>${escapeHtml(`role ${coord.role || "independent"}`)}</div>
+          <strong>${escapeHtml(obstacleCount)} obstacle(s)</strong>
+          <div>${escapeHtml(`map risk ${mapRisk}`)}</div>
+          <div>${escapeHtml(sourceLabel)}</div>
           <div>${escapeHtml(`min peer ${fmtNum(coord.min_peer_distance_m, 2)} m`)}</div>
         </div>
       `;
@@ -1271,82 +2083,222 @@ function renderMapSummaryGrid(items) {
     .join("");
 }
 
+function highestRiskFromObstacles(obstacles) {
+  return (obstacles || []).reduce((best, obs) => {
+    const risk = normalizedRiskLevel(obs.risk_level);
+    return riskRank(risk) > riskRank(best) ? risk : best;
+  }, "NONE");
+}
+
+function spatialRiskForRobot(robot) {
+  if (vehicleSimulationMode && isDetectorVehicleScenario()) {
+    return highestRiskFromObstacles(highwayPerceptionForRobot(robot).obstacles) || "LOW";
+  }
+  return highestRobotRisk(robot);
+}
+
 function renderRiskMap(items) {
   if (!riskMap) return;
-  const robots = items.filter((robot) => Number.isFinite(Number(robot.pose?.x)) && Number.isFinite(Number(robot.pose?.y)));
+  const robots = buildSimulationVehicles(items.filter((robot) => !isKinectRobot(robot))).filter(
+    (robot) => Number.isFinite(Number(robot.pose?.x)) && Number.isFinite(Number(robot.pose?.y))
+  );
   if (!robots.length) {
-    riskMap.innerHTML = `<div class="risk-map-empty">No robot positions yet. Publish telemetry to populate the spatial view.</div>`;
+    riskMap.innerHTML = `<div class="risk-map-empty">No vehicle positions yet. Enable Vehicle Simulation or publish Raspberry Pi telemetry to populate spatial risk.</div>`;
     return;
   }
 
-  const xs = robots.map((robot) => Number(robot.pose.x));
-  const ys = robots.map((robot) => Number(robot.pose.y));
-  const minX = Math.min(...xs) - 1;
-  const maxX = Math.max(...xs) + 1;
-  const minY = Math.min(...ys) - 1;
-  const maxY = Math.max(...ys) + 1;
-  const width = 620;
-  const height = 286;
-  const scaleX = (x) => 30 + ((x - minX) / Math.max(1, maxX - minX)) * (width - 60);
-  const scaleY = (y) => height - 30 - ((y - minY) / Math.max(1, maxY - minY)) * (height - 60);
+  const width = 760;
+  const height = 390;
+  const rawObstacles = robots.flatMap((robot, idx) => {
+    if (usesSharedHighwayDemoSource() && idx > 0) return [];
+    const sourceObstacles =
+      vehicleSimulationMode && isDetectorVehicleScenario()
+        ? highwayPerceptionForRobot(robot).obstacles
+        : robot.map_summary?.obstacles || [];
+    return sourceObstacles.map((obs) => ({
+      ...obs,
+      robot_id: robot.robot_id,
+      risk_level: normalizedRiskLevel(obs.risk_level || robot.map_summary?.risk_level || spatialRiskForRobot(robot) || "MEDIUM"),
+      x: Number.isFinite(Number(obs.x)) ? Number(obs.x) : Number(robot.pose.x) + 1.8,
+      y: Number.isFinite(Number(obs.y)) ? Number(obs.y) : Number(robot.pose.y),
+    }));
+  });
+  const obstacleById = new Map();
+  rawObstacles.forEach((obs, idx) => {
+    const key = obs.id || `${obs.label || "obstacle"}:${fmtNum(obs.x, 2)}:${fmtNum(obs.y, 2)}`;
+    const current = obstacleById.get(key);
+    if (!current) {
+      obstacleById.set(key, { ...obs, observers: [obs.robot_id] });
+      return;
+    }
+    current.observers.push(obs.robot_id);
+    if (riskRank(obs.risk_level) > riskRank(current.risk_level)) {
+      current.risk_level = obs.risk_level;
+    }
+    if (Number.isFinite(Number(obs.distance_m))) {
+      current.distance_m = Math.min(Number(current.distance_m || obs.distance_m), Number(obs.distance_m));
+    }
+  });
+  const allObstacles = [...obstacleById.values()];
+  const kinectSource = items.find((robot) => isKinectRobot(robot));
+  const kinectRange = (vehicleSimulationMode || kinectSource)
+    ? {
+        robot_id: kinectSource?.robot_id || "KINECT-WIN",
+        x: -3.35,
+        y: 2.55,
+        yaw: -0.2,
+        range_m: 5.6,
+        status: kinectSource?.online === false ? "offline" : "online",
+      }
+    : null;
+  const xs = robots.map((robot) => Number(robot.pose.x)).concat(allObstacles.map((obs) => Number(obs.x)));
+  const ys = robots.map((robot) => Number(robot.pose.y)).concat(allObstacles.map((obs) => Number(obs.y)));
+  if (kinectRange) {
+    xs.push(kinectRange.x, kinectRange.x + kinectRange.range_m);
+    ys.push(kinectRange.y, kinectRange.y - 2.2, kinectRange.y + 0.8);
+  }
+  const fixedVehicleMap = vehicleSimulationMode || vehicleSimulationScenario === "highway";
+  const minX = fixedVehicleMap ? -4.2 : Math.min(...xs) - 1.4;
+  const maxX = fixedVehicleMap ? 9.2 : Math.max(...xs) + 1.4;
+  const minY = fixedVehicleMap ? -3.8 : Math.min(...ys) - 1.2;
+  const maxY = fixedVehicleMap ? 3.8 : Math.max(...ys) + 1.2;
+  const scaleX = (x) => 52 + ((x - minX) / Math.max(1, maxX - minX)) * (width - 104);
+  const scaleY = (y) => height - 48 - ((y - minY) / Math.max(1, maxY - minY)) * (height - 96);
+  const headingPoint = (robot, distance, lateral = 0) => {
+    const yaw = Number(robot.pose?.yaw || 0);
+    const x = Number(robot.pose.x) + Math.cos(yaw) * distance - Math.sin(yaw) * lateral;
+    const y = Number(robot.pose.y) + Math.sin(yaw) * distance + Math.cos(yaw) * lateral;
+    return [scaleX(x), scaleY(y)];
+  };
 
-  const obstacleMarks = robots
-    .flatMap((robot) =>
-      (robot.map_summary?.obstacles || []).map((obs) => {
-        const px = scaleX(Number(obs.x || robot.pose.x));
-        const py = scaleY(Number(obs.y || robot.pose.y));
-        return `<rect x="${px - 8}" y="${py - 8}" width="16" height="16" fill="${riskColor(robot.map_summary?.risk_level || "MEDIUM")}" stroke="#fff" stroke-width="2" />`;
-      })
-    )
+  const gridLines = Array.from({ length: 9 }, (_, idx) => {
+    const x = 52 + idx * ((width - 104) / 8);
+    const y = 48 + idx * ((height - 96) / 8);
+    return `
+      <line x1="${x}" y1="36" x2="${x}" y2="${height - 36}" />
+      <line x1="40" y1="${y}" x2="${width - 40}" y2="${y}" />
+    `;
+  }).join("");
+
+  const fovMarks = robots
+    .map((robot, idx) => {
+      const [rx, ry] = [scaleX(Number(robot.pose.x)), scaleY(Number(robot.pose.y))];
+      const [lx, ly] = headingPoint(robot, 3.4, -1.25);
+      const [cx, cy] = headingPoint(robot, 4.2, 0);
+      const [rx2, ry2] = headingPoint(robot, 3.4, 1.25);
+      const risk = usesSharedHighwayDemoSource() && idx > 0 ? "LOW" : normalizedRiskLevel(spatialRiskForRobot(robot));
+      return `
+        <path d="M ${rx} ${ry} L ${lx} ${ly} Q ${cx} ${cy} ${rx2} ${ry2} Z" fill="${riskColor(risk)}" opacity="0.10" stroke="${riskColor(risk)}" stroke-width="1.5" stroke-dasharray="6 5" />
+        <line x1="${rx}" y1="${ry}" x2="${cx}" y2="${cy}" stroke="${riskColor(risk)}" stroke-width="1" opacity="0.55" />
+      `;
+    })
+    .join("");
+
+  const kinectRangeMark = kinectRange
+    ? (() => {
+        const kx = scaleX(kinectRange.x);
+        const ky = scaleY(kinectRange.y);
+        const left = [scaleX(kinectRange.x + 4.4), scaleY(kinectRange.y + 0.9)];
+        const center = [scaleX(kinectRange.x + kinectRange.range_m), scaleY(kinectRange.y - 0.85)];
+        const right = [scaleX(kinectRange.x + 4.1), scaleY(kinectRange.y - 2.35)];
+        const color = "#7eff96";
+        return `
+          <g class="risk-kinect-range">
+            <path d="M ${kx} ${ky} L ${left[0]} ${left[1]} Q ${center[0]} ${center[1]} ${right[0]} ${right[1]} Z" fill="${color}" opacity="0.09" stroke="${color}" stroke-width="2" stroke-dasharray="9 6" />
+            <circle cx="${kx}" cy="${ky}" r="13" fill="#0b0b0b" stroke="${color}" stroke-width="3" />
+            <line x1="${kx}" y1="${ky}" x2="${center[0]}" y2="${center[1]}" stroke="${color}" stroke-width="1.5" opacity="0.75" />
+            <text x="${kx + 18}" y="${ky - 10}" fill="${color}" font-size="12" font-family="IBM Plex Mono, monospace">${escapeHtml(kinectRange.robot_id)}</text>
+            <text x="${kx + 18}" y="${ky + 6}" fill="#bdbdbd" font-size="9" font-family="IBM Plex Mono, monospace">Kinect SDK range | ${escapeHtml(kinectRange.status)}</text>
+          </g>
+        `;
+      })()
+    : "";
+
+  const obstacleMarks = allObstacles
+    .map((obs) => {
+      const px = scaleX(Number(obs.x));
+      const py = scaleY(Number(obs.y));
+      const risk = normalizedRiskLevel(obs.risk_level);
+      const label = obs.label || "obstacle";
+      const distance = Number.isFinite(Number(obs.distance_m)) ? `${fmtNum(Number(obs.distance_m), 1)}m` : "video";
+      const sourceIdx = Number.isFinite(Number(obs.source_idx)) ? Number(obs.source_idx) : 0;
+      const labelOffsetY = [-18, 14, -26, 22, 0][sourceIdx] || 0;
+      return `
+        <g class="risk-obstacle-node">
+          <rect x="${px - 13}" y="${py - 13}" width="26" height="26" fill="${riskColor(risk)}" stroke="#fff" stroke-width="2" transform="rotate(45 ${px} ${py})" />
+          <circle cx="${px}" cy="${py}" r="24" fill="none" stroke="${riskColor(risk)}" stroke-width="2" stroke-dasharray="4 5" opacity="0.8" />
+          <text x="${px + 20}" y="${py - 6 + labelOffsetY}" fill="#fff" font-size="11" font-family="IBM Plex Mono, monospace">${escapeHtml(label)}</text>
+          <text x="${px + 20}" y="${py + 9 + labelOffsetY}" fill="#bdbdbd" font-size="9" font-family="IBM Plex Mono, monospace">${escapeHtml(distance)} | ${escapeHtml(risk)}</text>
+        </g>
+      `;
+    })
     .join("");
 
   const robotMarks = robots
-    .map((robot) => {
+    .map((robot, idx) => {
       const px = scaleX(Number(robot.pose.x));
       const py = scaleY(Number(robot.pose.y));
-      const risk = highestRobotRisk(robot);
+      const risk = usesSharedHighwayDemoSource() && idx > 0 ? "LOW" : normalizedRiskLevel(spatialRiskForRobot(robot));
+      const yaw = Number(robot.pose?.yaw || 0);
+      const arrowX = px + Math.cos(yaw) * 28;
+      const arrowY = py - Math.sin(yaw) * 28;
       const ring = ["HIGH", "CRITICAL"].includes(risk)
-        ? `<circle cx="${px}" cy="${py}" r="24" fill="none" stroke="${riskColor(risk)}" stroke-width="4" stroke-dasharray="5 4" />`
+        ? `<circle cx="${px}" cy="${py}" r="31" fill="none" stroke="${riskColor(risk)}" stroke-width="4" stroke-dasharray="5 4" />`
         : "";
       return `
         ${ring}
-        <circle cx="${px}" cy="${py}" r="13" fill="${riskColor(risk)}" stroke="#ffffff" stroke-width="3" />
-        <text x="${px + 16}" y="${py - 12}" fill="#ffffff" font-size="12" font-family="IBM Plex Mono, monospace">${escapeHtml(robot.robot_id)}</text>
-        <text x="${px + 16}" y="${py + 6}" fill="#bbbbbb" font-size="10" font-family="IBM Plex Mono, monospace">${escapeHtml(robot.coordination?.role || "independent")}</text>
+        <line x1="${px}" y1="${py}" x2="${arrowX}" y2="${arrowY}" stroke="#ffffff" stroke-width="3" />
+        <circle cx="${px}" cy="${py}" r="15" fill="${riskColor(risk)}" stroke="#ffffff" stroke-width="4" />
+        <text x="${px + 20}" y="${py - 14}" fill="#ffffff" font-size="13" font-family="IBM Plex Mono, monospace">${escapeHtml(robot.robot_id)}</text>
+        <text x="${px + 20}" y="${py + 4}" fill="#bbbbbb" font-size="10" font-family="IBM Plex Mono, monospace">${escapeHtml(robot.coordination?.role || "independent")} | ${escapeHtml(risk)}</text>
       `;
     })
     .join("");
 
   const links = robots
     .flatMap((robot) =>
-      (robot.coordination?.neighbors || [])
-        .slice(0, 1)
-        .map((neighbor) => {
-          const peer = robots.find((item) => item.robot_id === neighbor.robot_id);
-          if (!peer) return "";
-          return `<line x1="${scaleX(Number(robot.pose.x))}" y1="${scaleY(Number(robot.pose.y))}" x2="${scaleX(Number(peer.pose.x))}" y2="${scaleY(Number(peer.pose.y))}" stroke="${riskColor(neighbor.risk_level)}" stroke-width="2" stroke-dasharray="6 5" />`;
-        })
+      (robot.coordination?.neighbors || []).map((neighbor) => {
+        const peer = robots.find((item) => item.robot_id === neighbor.robot_id);
+        if (!peer) return "";
+        const risk = normalizedRiskLevel(neighbor.risk_level);
+        const mx = (scaleX(Number(robot.pose.x)) + scaleX(Number(peer.pose.x))) / 2;
+        const my = (scaleY(Number(robot.pose.y)) + scaleY(Number(peer.pose.y))) / 2;
+        return `
+          <line x1="${scaleX(Number(robot.pose.x))}" y1="${scaleY(Number(robot.pose.y))}" x2="${scaleX(Number(peer.pose.x))}" y2="${scaleY(Number(peer.pose.y))}" stroke="${riskColor(risk)}" stroke-width="2" stroke-dasharray="8 6" />
+          <text x="${mx + 8}" y="${my - 8}" fill="${riskColor(risk)}" font-size="10" font-family="IBM Plex Mono, monospace">${escapeHtml(fmtNum(neighbor.distance_m, 1))}m</text>
+        `;
+      })
     )
     .join("");
 
   riskMap.innerHTML = `
-    <svg class="risk-stage" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
-      <rect x="0" y="0" width="${width}" height="${height}" fill="#0d0d0d" />
-      <g stroke="#303030" stroke-width="1">
-        <line x1="30" y1="30" x2="30" y2="${height - 30}" />
-        <line x1="30" y1="${height - 30}" x2="${width - 30}" y2="${height - 30}" />
-        <line x1="30" y1="${height / 2}" x2="${width - 30}" y2="${height / 2}" />
-        <line x1="${width / 2}" y1="30" x2="${width / 2}" y2="${height - 30}" />
-      </g>
-      ${links}
-      ${obstacleMarks}
-      ${robotMarks}
-    </svg>
-    <div class="risk-legend">
-      <div class="risk-legend-item"><span class="risk-dot" style="background:${riskColor("LOW")}"></span>Low</div>
-      <div class="risk-legend-item"><span class="risk-dot" style="background:${riskColor("MEDIUM")}"></span>Medium</div>
-      <div class="risk-legend-item"><span class="risk-dot" style="background:${riskColor("HIGH")}"></span>High</div>
-      <div class="risk-legend-item"><span class="risk-dot" style="background:${riskColor("CRITICAL")}"></span>Critical</div>
+    <div class="risk-stage-wrap">
+      <svg class="risk-stage" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
+        <defs>
+          <marker id="riskArrow" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#ffffff" />
+          </marker>
+        </defs>
+        <rect x="0" y="0" width="${width}" height="${height}" fill="#080808" />
+        <g stroke="#2a2a2a" stroke-width="1" opacity="0.85">${gridLines}</g>
+        <g stroke="#4b4b4b" stroke-width="1.5">
+          <line x1="40" y1="${height - 48}" x2="${width - 40}" y2="${height - 48}" marker-end="url(#riskArrow)" />
+          <line x1="52" y1="${height - 36}" x2="52" y2="36" marker-end="url(#riskArrow)" />
+        </g>
+        <text x="62" y="42" fill="#8a8a8a" font-size="10" font-family="IBM Plex Mono, monospace">relative y</text>
+        <text x="${width - 132}" y="${height - 58}" fill="#8a8a8a" font-size="10" font-family="IBM Plex Mono, monospace">relative x</text>
+        ${kinectRangeMark}
+        ${fovMarks}
+        ${links}
+        ${obstacleMarks}
+        ${robotMarks}
+      </svg>
+      <div class="risk-legend">
+        <div class="risk-legend-item"><span class="risk-dot" style="background:${riskColor("LOW")}"></span>Low</div>
+        <div class="risk-legend-item"><span class="risk-dot" style="background:${riskColor("MEDIUM")}"></span>Medium</div>
+        <div class="risk-legend-item"><span class="risk-dot" style="background:${riskColor("HIGH")}"></span>High</div>
+        <div class="risk-legend-item"><span class="risk-dot" style="background:${riskColor("CRITICAL")}"></span>Critical</div>
+      </div>
     </div>
   `;
 }
@@ -1357,21 +2309,49 @@ function renderAlertList(alerts) {
     alertList.innerHTML = `<div class="video-empty">No active alerts. Perception worker has not raised any hazard yet.</div>`;
     return;
   }
-  alertList.innerHTML = alerts
+  const groups = new Map();
+  alerts.forEach((alert) => {
+    const key = [alert.alert_type, alert.robot_id, alert.severity, alert.message].map((value) => String(value || "")).join("|");
+    const current =
+      groups.get(key) ||
+      {
+        ...alert,
+        ids: [],
+        count: 0,
+        latestTs: 0,
+        labels: new Set(),
+      };
+    if (alert.alert_id) current.ids.push(alert.alert_id);
+    current.count += 1;
+    current.latestTs = Math.max(current.latestTs, Number(alert.ts || 0));
+    (alert.metadata?.detection_labels || []).forEach((label) => current.labels.add(label));
+    groups.set(key, current);
+  });
+  const compactAlerts = [...groups.values()].sort((a, b) => b.latestTs - a.latestTs);
+  const hiddenCount = Math.max(0, compactAlerts.length - 8);
+  alertList.innerHTML = compactAlerts
+    .slice(0, 8)
     .map(
-      (alert) => `
+      (alert) => {
+        const labelText = [...alert.labels].join(", ") || "no labels";
+        return `
         <article class="alert-card ${severityClass(alert.severity)}">
           <div class="alert-head">
-            <strong>${escapeHtml(alert.alert_type)}</strong>
-            <button class="btn subtle ack-btn" data-alert-id="${escapeHtml(alert.alert_id)}">Acknowledge</button>
+            <div class="alert-title">
+              <strong>${escapeHtml(alert.alert_type)}</strong>
+              ${alert.count > 1 ? `<span class="alert-count">x${escapeHtml(alert.count)}</span>` : ""}
+            </div>
+            <button class="btn subtle ack-btn" data-alert-ids="${escapeHtml(alert.ids.join(","))}">ACK</button>
           </div>
-          <div>${escapeHtml(alert.message)}</div>
-          <div class="alert-meta">${escapeHtml(`${alert.robot_id} | ${alert.severity} | ${formatTs((alert.ts || 0) * 1000)}`)}</div>
-          <div class="alert-meta">${escapeHtml((alert.metadata?.detection_labels || []).join(", ") || "no labels")}</div>
+          <div class="alert-message">${escapeHtml(alert.message)}</div>
+          <div class="alert-meta">${escapeHtml(`${alert.robot_id} | ${alert.severity} | ${formatTs(alert.latestTs * 1000)}`)}</div>
+          <div class="alert-meta">${escapeHtml(labelText)}</div>
         </article>
-      `
+      `;
+      }
     )
-    .join("");
+    .join("") +
+    (hiddenCount ? `<div class="alert-more">${escapeHtml(hiddenCount)} more grouped alert(s)</div>` : "");
 }
 
 function renderProtocolSummary(items) {
@@ -1552,8 +2532,8 @@ function drawDiagChart() {
 }
 
 function getVideoVehicleCount() {
-  const selected = Number(diagVideoRobotCount?.value || 3);
-  return clamp(Math.round(selected), 1, 5);
+  const selected = Number(diagVideoRobotCount?.value || vehicleCountSelect?.value || DEFAULT_VEHICLE_COUNT);
+  return clamp(Math.round(selected), 1, 4);
 }
 
 function stressSummary(nowMs = Date.now()) {
@@ -2047,6 +3027,54 @@ document.getElementById("refreshBtn").onclick = async () => {
 };
 
 networkMetricSelect.onchange = drawNetworkChart;
+function applyVehicleCount(value) {
+  const count = Math.max(1, Math.min(4, Number(value) || DEFAULT_VEHICLE_COUNT));
+  localStorage.setItem("autofleet_vehicle_count", String(count));
+  if (vehicleCountSelect) vehicleCountSelect.value = String(count);
+  if (diagVideoRobotCount) diagVideoRobotCount.value = String(count);
+  stressState.vehicle_count = count;
+  videoWallRenderKey = "";
+  highwayPerceptionByRobot.clear();
+  spatialObstacleMemory.clear();
+  renderVideoWall(robotsCache);
+  renderRiskMap(robotsCache);
+  renderMapSummaryGrid(robotsCache);
+  resetVehicleTrackLoop();
+}
+
+if (diagVideoRobotCount) {
+  diagVideoRobotCount.onchange = () => {
+    applyVehicleCount(diagVideoRobotCount.value);
+    if (lastDiagSnapshot) {
+      renderDiagnostics(lastDiagSnapshot);
+    }
+  };
+}
+
+if (vehicleCountSelect) {
+  vehicleCountSelect.onchange = () => {
+    applyVehicleCount(vehicleCountSelect.value);
+    if (!vehicleSimulationMode) {
+      vehicleSimulationMode = true;
+      localStorage.setItem("autofleet_vehicle_simulation", "on");
+      updateVehicleSimulationButton();
+    }
+    setDiagStatus(`Vehicle wall configured for ${demoVehicleCount()} robot cards. Shared demo video remains marked when only one source is available.`);
+  };
+}
+
+if (vehicleScenarioSelect) {
+  vehicleScenarioSelect.onchange = () => {
+    applyVehicleScenario(vehicleScenarioSelect.value, { enableSimulation: true });
+  };
+}
+
+if (vehicleSourceSelect) {
+  vehicleSourceSelect.onchange = () => {
+    applyVehicleScenario(vehicleSourceSelect.value, { enableSimulation: true });
+    setView("control");
+  };
+}
 
 if (viewControlBtn) {
   viewControlBtn.onclick = () => setView("control");
@@ -2071,6 +3099,41 @@ if (diagStressBtn) {
   diagStressBtn.onclick = () => {
     setView("diagnostics");
     startStressTest();
+  };
+}
+
+if (vehicleSimulationBtn) {
+  vehicleSimulationBtn.onclick = () => {
+    vehicleSimulationMode = !vehicleSimulationMode;
+    localStorage.setItem("autofleet_vehicle_simulation", vehicleSimulationMode ? "on" : "off");
+    videoWallRenderKey = "";
+    updateVehicleSimulationButton();
+    resetRiskAnimation();
+    renderVideoWall(robotsCache);
+    renderRiskMap(robotsCache);
+    renderMapSummaryGrid(robotsCache);
+    resetVehicleTrackLoop();
+    setDiagStatus(vehicleSimulationMode ? "Vehicle simulation enabled for vehicle video wall only; Kinect Studio remains on the live SDK bridge." : "Vehicle simulation disabled; vehicle cards use live backend streams when robots publish video.");
+    setView("control");
+  };
+}
+
+if (vehicleSimulationToggleBtn) {
+  vehicleSimulationToggleBtn.onclick = () => {
+    vehicleSimulationMode = !vehicleSimulationMode;
+    localStorage.setItem("autofleet_vehicle_simulation", vehicleSimulationMode ? "on" : "off");
+    videoWallRenderKey = "";
+    syncVehicleScenarioControl();
+    updateVehicleSimulationButton();
+    resetRiskAnimation();
+    renderVideoWall(robotsCache);
+    renderRiskMap(robotsCache);
+    renderMapSummaryGrid(robotsCache);
+    resetVehicleTrackLoop();
+    if (videoQualityStatus) {
+      videoQualityStatus.textContent = vehicleSimulationMode ? `Vehicle sim: ${currentVehicleScenario().label}` : "Browser-playable streams";
+    }
+    setDiagStatus(vehicleSimulationMode ? `Vehicle simulation enabled: ${currentVehicleScenario().label}. Kinect remains live.` : "Vehicle simulation disabled; vehicle cards use live backend streams when robots publish video.");
   };
 }
 
@@ -2155,15 +3218,23 @@ document.getElementById("stopFollowBtn").onclick = async () => {
 
 if (alertList) {
   alertList.addEventListener("click", async (ev) => {
-    const btn = ev.target.closest("[data-alert-id]");
+    if (!(ev.target instanceof Element)) return;
+    const btn = ev.target.closest("[data-alert-id], [data-alert-ids]");
     if (!btn) return;
-    const alertId = btn.getAttribute("data-alert-id");
-    if (!alertId) return;
+    const alertIds = (btn.getAttribute("data-alert-ids") || btn.getAttribute("data-alert-id") || "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (!alertIds.length) return;
     try {
-      await api(`/alerts/${encodeURIComponent(alertId)}/ack`, {
-        method: "POST",
-        body: JSON.stringify({ status: "acknowledged" }),
-      });
+      await Promise.all(
+        alertIds.map((alertId) =>
+          api(`/alerts/${encodeURIComponent(alertId)}/ack`, {
+            method: "POST",
+            body: JSON.stringify({ status: "acknowledged" }),
+          })
+        )
+      );
       await refreshRobots({ quiet: true });
     } catch (err) {
       print({ error: String(err) });
@@ -2251,14 +3322,54 @@ window.addEventListener("resize", () => {
 async function boot() {
   applyNeoTheme();
   initApiBase();
+  const urlParams = new URLSearchParams(window.location.search);
+  const vehicleSimParam = urlParams.get("vehicle_sim");
+  if (vehicleSimParam === "on" || vehicleSimParam === "1" || vehicleSimParam === "true") {
+    vehicleSimulationMode = true;
+    localStorage.setItem("autofleet_vehicle_simulation", "on");
+  }
+  const vehicleSceneParam = urlParams.get("vehicle_scene");
+  if (vehicleSceneParam === "aligned" || vehicleSceneParam === "highway" || vehicleSceneParam === "mtid") {
+    vehicleSimulationScenario = vehicleSceneParam;
+    localStorage.setItem("autofleet_vehicle_simulation_scenario", vehicleSimulationScenario);
+  }
+  const vehicleCountParam = Number(urlParams.get("vehicle_count"));
+  if (Number.isFinite(vehicleCountParam) && vehicleCountParam >= 1) {
+    localStorage.setItem("autofleet_vehicle_count", String(clamp(Math.round(vehicleCountParam), 1, 4)));
+  }
   setEndpointStatus(`Using ${describeApiBase(apiBase)} while detecting alternatives...`, "online");
   setDiagStatus("Idle.");
+  syncVehicleScenarioControl();
+  syncVehicleCountControls();
+  updateVehicleSimulationButton();
+  if (videoQualityStatus && vehicleSimulationMode) {
+    videoQualityStatus.textContent = `Vehicle sim: ${currentVehicleScenario().label}`;
+  }
+  if (vehicleSimulationMode && vehicleSimulationScenario === "mtid") {
+    await loadVehicleMultiviewManifest().catch((err) => {
+      setDiagStatus(`MTID manifest unavailable: ${String(err.message || err)}`);
+    });
+  }
+  resetRiskAnimation();
+  resetVehicleTrackLoop();
   setView(localStorage.getItem("autofleet_view") || "control");
+  if (vehicleSimulationMode) {
+    renderVideoWall([]);
+    renderRiskMap([]);
+    renderMapSummaryGrid([]);
+  }
   detectApiEndpoints().catch((err) => setEndpointStatus(`Endpoint detection failed: ${String(err)}`, "offline"));
   loadVideoSettings().catch(() => {});
   refreshRobots()
     .then(() => refreshDiagnosticsSnapshot({ quiet: true }))
-    .catch((err) => print({ error: String(err) }));
+    .catch((err) => {
+      if (vehicleSimulationMode) {
+        renderVideoWall([]);
+        renderRiskMap([]);
+        renderMapSummaryGrid([]);
+      }
+      print({ error: String(err) });
+    });
   refreshFormation({ quiet: true }).catch((err) => print({ error: String(err) }));
 }
 

@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./styles.css?v=20260615-kinect-grid">
+  <link rel="stylesheet" href="./styles.css?v=20260618-layout-yolo-v2">
 </head>
 <body>
   <main class="app-shell">
@@ -146,6 +146,22 @@
         <div class="video-controls">
           <span class="badge" id="videoQualityStatus">Browser-playable streams</span>
           <label class="inline metric-inline">
+            Sim Source
+            <select id="vehicleSourceSelect">
+              <option value="aligned">Aligned Perception</option>
+              <option value="highway">Highway Clip + Overlay</option>
+              <option value="mtid">MTID Multiview Dataset</option>
+            </select>
+          </label>
+          <label class="inline metric-inline">
+            Robots
+            <select id="vehicleCountSelect">
+              <option value="3" selected>3</option>
+              <option value="4">4</option>
+            </select>
+          </label>
+          <button id="vehicleSimulationToggleBtn" class="btn subtle">Vehicle Sim Off</button>
+          <label class="inline metric-inline">
             Quality
             <select id="videoQualitySelect">
               <option value="ultra_low_latency">Ultra Low Latency</option>
@@ -163,53 +179,55 @@
     <section class="panel risk-panel view-control">
       <div class="section-head">
         <h2>Spatial Risk</h2>
-        <span class="badge">Obstacles + coordination</span>
+        <span class="badge">Perception map + coordination</span>
       </div>
       <div id="riskMap" class="risk-map"></div>
       <div id="mapSummaryGrid" class="summary-grid"></div>
     </section>
 
-    <section class="panel command-panel view-control">
-      <h2>Single Command</h2>
-      <label>Robot ID <input id="robotId" value="R1"></label>
-      <label>Command Type <input id="commandType" value="SET_MODE"></label>
-      <label>Args(JSON)</label>
-      <textarea id="commandArgs" rows="5">{"mode":"AUTO"}</textarea>
-      <button id="sendCmdBtn" class="btn accent">Send Command</button>
-    </section>
+    <div class="workflow-row view-control">
+      <section class="panel command-panel">
+        <h2>Single Command</h2>
+        <label>Robot ID <input id="robotId" value="R1"></label>
+        <label>Command Type <input id="commandType" value="SET_MODE"></label>
+        <label>Args(JSON)</label>
+        <textarea id="commandArgs" rows="4">{"mode":"AUTO"}</textarea>
+        <button id="sendCmdBtn" class="btn accent">Send Command</button>
+      </section>
 
-    <section class="panel mission-panel view-control">
-      <h2>Mission</h2>
-      <label>Mission ID <input id="missionId" value="m-demo-001"></label>
-      <label>Robots(comma separated) <input id="missionRobots" value="R1,R2,R3"></label>
-      <div class="button-row">
-        <button id="startMissionBtn" class="btn accent">Start Mission</button>
-        <button id="returnMissionBtn" class="btn subtle">Return Mission</button>
-        <button id="stopMissionBtn" class="btn subtle">Stop Mission</button>
-      </div>
-    </section>
+      <section class="panel mission-panel">
+        <h2>Mission</h2>
+        <label>Mission ID <input id="missionId" value="m-demo-001"></label>
+        <label>Robots(comma separated) <input id="missionRobots" value="R1,R2,R3"></label>
+        <div class="button-row">
+          <button id="startMissionBtn" class="btn accent">Start</button>
+          <button id="returnMissionBtn" class="btn subtle">Return</button>
+          <button id="stopMissionBtn" class="btn subtle">Stop</button>
+        </div>
+      </section>
 
-    <section class="panel output-panel view-control">
-      <h2>Output</h2>
-      <pre id="output"></pre>
-    </section>
+      <section class="panel output-panel">
+        <h2>Output</h2>
+        <pre id="output"></pre>
+      </section>
 
-    <section class="panel alerts-panel view-control">
-      <div class="section-head">
-        <h2>Active Alerts</h2>
-        <span class="badge">Danger perception</span>
-      </div>
-      <div id="alertList" class="alert-list"></div>
-    </section>
+      <section class="panel alerts-panel">
+        <div class="section-head">
+          <h2>Active Alerts</h2>
+          <span class="badge">Danger perception</span>
+        </div>
+        <div id="alertList" class="alert-list"></div>
+      </section>
 
-    <section class="panel protocol-panel view-control">
-      <div class="section-head">
-        <h2>Protocol Status</h2>
-        <span class="badge">V2X runtime</span>
-      </div>
-      <div id="protocolSummary" class="summary-grid"></div>
-      <pre id="protocolOutput"></pre>
-    </section>
+      <section class="panel protocol-panel">
+        <div class="section-head">
+          <h2>Protocol Status</h2>
+          <span class="badge">V2X runtime</span>
+        </div>
+        <div id="protocolSummary" class="summary-grid"></div>
+        <pre id="protocolOutput"></pre>
+      </section>
+    </div>
 
     <section class="panel diagnostics-panel view-diagnostics">
       <div class="section-head">
@@ -222,9 +240,17 @@
               <option value="2">2</option>
               <option value="3" selected>3</option>
               <option value="4">4</option>
-              <option value="5">5</option>
             </select>
           </label>
+          <label class="inline diag-inline">
+            Scene
+            <select id="vehicleScenarioSelect">
+              <option value="aligned">Aligned Perception</option>
+              <option value="highway">Highway Clip + Overlay</option>
+              <option value="mtid">MTID Multiview Dataset</option>
+            </select>
+          </label>
+          <button id="vehicleSimulationBtn" class="btn subtle">Vehicle Simulation Off</button>
           <button id="diagSnapshotBtn" class="btn subtle">Refresh Snapshot</button>
           <button id="diagStressBtn" class="btn accent">Start 1-min Video Stress (Sim)</button>
           <button id="diagStopBtn" class="btn subtle">Stop</button>
@@ -254,6 +280,6 @@
       <pre id="diagOutput"></pre>
     </section>
   </main>
-  <script src="./app.js?v=20260616-kinect-sdk-fullscreen-v1"></script>
+  <script src="./app.js?v=20260618-layout-yolo-v2"></script>
 </body>
 </html>

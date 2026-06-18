@@ -1,0 +1,45 @@
+{
+  "schema": "autofleet.vehicle_multiview.v1",
+  "name": "MTID real multiview vehicle clips",
+  "dataset": "Multi-view Traffic Intersection Dataset",
+  "source_url": "https://www.kaggle.com/datasets/andreasmoegelmose/multiview-traffic-intersection-dataset",
+  "note": "R1/R2 are synchronized MTID seq3-0000 infrastructure/drone views. R3 is a separate MTID infrastructure segment, not a cloned feed.",
+  "views": [
+    {
+      "robot_id": "R1",
+      "label": "MTID infrastructure seq0",
+      "role": "infrastructure north",
+      "camera_label": "INFRA CAMERA",
+      "sync_group": "seq3-0000",
+      "video_url": "./assets/mtid/mtid-r1-infrastructure-0.mp4",
+      "tracks_url": "./assets/mtid/mtid-r1-infrastructure-0-tracks.json",
+      "source_type": "mtid-annotation",
+      "view": "Infrastructure/0",
+      "frames": 180
+    },
+    {
+      "robot_id": "R2",
+      "label": "MTID drone seq0",
+      "role": "drone overhead",
+      "camera_label": "DRONE CAMERA",
+      "sync_group": "seq3-0000",
+      "video_url": "./assets/mtid/mtid-r2-drone-0.mp4",
+      "tracks_url": "./assets/mtid/mtid-r2-drone-0-tracks.json",
+      "source_type": "mtid-annotation",
+      "view": "Drone/0",
+      "frames": 180
+    },
+    {
+      "robot_id": "R3",
+      "label": "MTID infrastructure seq1000",
+      "role": "infrastructure east",
+      "camera_label": "INFRA CAMERA",
+      "sync_group": "seq3-1000",
+      "video_url": "./assets/mtid/mtid-r3-infrastructure-1000.mp4",
+      "tracks_url": "./assets/mtid/mtid-r3-infrastructure-1000-tracks.json",
+      "source_type": "mtid-annotation",
+      "view": "Infrastructure/1000",
+      "frames": 180
+    }
+  ]
+}
