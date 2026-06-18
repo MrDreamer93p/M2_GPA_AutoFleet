@@ -1,0 +1,44 @@
+{
+  "schema": "autofleet.vehicle_multiview.v1",
+  "name": "Moving highway drive clips",
+  "dataset": "Mixed public moving-road samples",
+  "note": "Moving vehicle-camera scenario. R1, R2 and R3 use separate real driving clips with independent YOLO/OpenCV tracks. R4 repeats R3 only when four simulated robots are requested.",
+  "views": [
+    {
+      "robot_id": "R1",
+      "label": "forward highway drive",
+      "role": "lead moving view",
+      "camera_label": "FORWARD DRIVE",
+      "sync_group": "moving-highway",
+      "video_url": "./assets/highway-forward.mp4",
+      "tracks_url": "./assets/highway-vehicle-tracks.json",
+      "source_type": "opencv-yolo",
+      "source_url": "local demo asset",
+      "view": "front_forward"
+    },
+    {
+      "robot_id": "R2",
+      "label": "adjacent vehicle drive",
+      "role": "wing moving view",
+      "camera_label": "ADJACENT DRIVE",
+      "sync_group": "moving-highway",
+      "video_url": "./assets/highway/highway-road-view-2.mp4",
+      "tracks_url": "./assets/highway/highway-road-view-2-tracks.json",
+      "source_type": "opencv-yolo",
+      "source_url": "https://raw.githubusercontent.com/jeongwhanchoi/CarND-Vehicle-Detection/master/test_video.mp4",
+      "view": "front_adjacent"
+    },
+    {
+      "robot_id": "R3",
+      "label": "open highway drive",
+      "role": "center moving view",
+      "camera_label": "OPEN HIGHWAY",
+      "sync_group": "moving-highway",
+      "video_url": "./assets/highway/highway-road-view-3.mp4",
+      "tracks_url": "./assets/highway/highway-road-view-3-tracks.json",
+      "source_type": "opencv-yolo",
+      "source_url": "https://raw.githubusercontent.com/NikolasEnt/Vehicle-Detection-and-Tracking/master/project_video.mp4",
+      "view": "front_open"
+    }
+  ]
+}

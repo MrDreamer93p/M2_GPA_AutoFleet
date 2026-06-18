@@ -55,9 +55,9 @@ const VEHICLE_SIM_SCENARIOS = {
     note: "State-aligned synthetic perception scene.",
   },
   highway: {
-    label: "Legacy Single Highway Clip",
+    label: "Moving Highway Drive",
     mode: "video",
-    note: "Single-camera fallback only. It is not used for the multi-agent demo wall.",
+    note: "Moving vehicle-camera clips with per-view OpenCV/YOLO vehicle tracks.",
   },
   mtid: {
     label: "BMVC/I-24 Style Multiview",
@@ -66,6 +66,7 @@ const VEHICLE_SIM_SCENARIOS = {
   },
 };
 const HIGHWAY_TRACKS_URL = "./assets/highway-vehicle-tracks.json";
+const HIGHWAY_MOVING_MANIFEST_URL = "./assets/highway-moving.json";
 const MULTIVIEW_MANIFEST_URL = "./assets/vehicle-multiview.json";
 const DETECTOR_MIN_CONFIDENCE = 0.35;
 const DETECTOR_MIN_AREA = 900;
@@ -114,6 +115,8 @@ let kinectStageRenderKey = "";
 let videoSettingsCache = null;
 let highwayVehicleTracks = null;
 let highwayTracksPromise = null;
+let highwayMovingManifest = null;
+let highwayMovingPromise = null;
 let vehicleMultiviewManifest = null;
 let vehicleMultiviewPromise = null;
 const vehicleTracksByUrl = new Map();
@@ -399,7 +402,7 @@ function demoVehicleCount() {
 }
 
 function normalizeVehicleScenario(value) {
-  if (value === "highway" || value === "i24" || value === "bmvc") return "mtid";
+  if (value === "i24" || value === "bmvc") return "mtid";
   return Object.prototype.hasOwnProperty.call(VEHICLE_SIM_SCENARIOS, value) ? value : "aligned";
 }
 
@@ -412,7 +415,8 @@ function isDetectorVehicleScenario() {
 }
 
 function multiviewViews() {
-  return Array.isArray(vehicleMultiviewManifest?.views) ? vehicleMultiviewManifest.views : [];
+  const manifest = normalizeVehicleScenario(vehicleSimulationScenario) === "highway" ? highwayMovingManifest : vehicleMultiviewManifest;
+  return Array.isArray(manifest?.views) ? manifest.views : [];
 }
 
 function multiviewViewForIndex(idx) {
@@ -422,11 +426,42 @@ function multiviewViewForIndex(idx) {
 
 function multiviewViewForRobot(robotId) {
   const id = String(robotId || "");
-  return multiviewViews().find((view) => String(view.robot_id || "") === id) || null;
+  const views = multiviewViews();
+  const direct = views.find((view) => String(view.robot_id || "") === id);
+  if (direct) return direct;
+  if (normalizeVehicleScenario(vehicleSimulationScenario) === "highway") {
+    const idx = Number(id.replace(/^R/i, "")) - 1;
+    if (Number.isFinite(idx) && idx >= 0 && views.length) return views[Math.min(idx, views.length - 1)];
+  }
+  return null;
 }
 
 function primaryMultiviewSyncGroup() {
   return multiviewViews()[0]?.sync_group || "";
+}
+
+function scenarioManifest() {
+  return normalizeVehicleScenario(vehicleSimulationScenario) === "highway" ? highwayMovingManifest : vehicleMultiviewManifest;
+}
+
+async function loadHighwayMovingManifest() {
+  if (highwayMovingManifest) return highwayMovingManifest;
+  if (!highwayMovingPromise) {
+    highwayMovingPromise = fetch(`${HIGHWAY_MOVING_MANIFEST_URL}?v=20260619-highway-moving-v2`, { cache: "force-cache" })
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data) => {
+        highwayMovingManifest = data;
+        return data;
+      })
+      .catch((err) => {
+        highwayMovingPromise = null;
+        throw err;
+      });
+  }
+  return highwayMovingPromise;
 }
 
 async function loadVehicleMultiviewManifest() {
@@ -458,7 +493,7 @@ async function loadVehicleTrackSet(url) {
   if (!key) throw new Error("missing vehicle track URL");
   if (vehicleTracksByUrl.has(key)) return vehicleTracksByUrl.get(key);
   if (!vehicleTrackPromises.has(key)) {
-    const promise = fetch(`${key}${key.includes("?") ? "&" : "?"}v=20260618-tracks-v2`, { cache: "force-cache" })
+    const promise = fetch(`${key}${key.includes("?") ? "&" : "?"}v=20260619-tracks-v3`, { cache: "force-cache" })
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
@@ -558,13 +593,14 @@ function buildSimulationVehicles(existingItems) {
   const now = Date.now() / 1000;
   const phase = now * 0.75;
   const scenarioKey = normalizeVehicleScenario(vehicleSimulationScenario);
-  if (scenarioKey === "mtid") {
+  if (scenarioKey === "mtid" || scenarioKey === "highway") {
     const scenario = currentVehicleScenario();
     const views = multiviewViews();
-    const count = views.length ? Math.min(demoVehicleCount(), views.length) : demoVehicleCount();
+    const count = views.length ? (scenarioKey === "highway" ? demoVehicleCount() : Math.min(demoVehicleCount(), views.length)) : demoVehicleCount();
     return Array.from({ length: count }, (_, idx) => {
-      const view = multiviewViewForIndex(idx);
-      const robotId = view?.robot_id || `R${idx + 1}`;
+      const view = views.length ? views[Math.min(idx, views.length - 1)] : null;
+      const repeatOf = view && idx >= views.length ? views.length : 0;
+      const robotId = `R${idx + 1}`;
       const profile = simulationVehicleProfile(idx);
       const x = profile.baseX + idx * 0.34 + Math.sin(phase + idx * 0.62) * 0.08;
       const y = profile.baseY + Math.cos(phase * 0.55 + idx) * 0.1;
@@ -581,21 +617,22 @@ function buildSimulationVehicles(existingItems) {
         controls: { linear_x: 0, angular_z: 0 },
         motors: { left_rpm: 0, right_rpm: 0 },
         latest_ack: { status: "simulated" },
-        video_rtsp_url: view?.video_url || "simulation://mtid-missing",
+        video_rtsp_url: view?.video_url || `simulation://${scenarioKey}-missing`,
         video_status: {
           status: view ? "online" : "missing",
           source_url: view?.video_url || "",
           track_url: view?.tracks_url || "",
-          source_type: view?.source_type || "mtid-missing",
-          view_profile: view?.label || "MTID view missing",
-          camera_label: view?.camera_label || "MTID CAMERA",
+          source_type: view?.source_type || `${scenarioKey}-missing`,
+          view_profile: repeatOf ? `${view?.label || "repeated view"} (repeat R${repeatOf})` : view?.label || `${scenario.label} view missing`,
+          camera_label: repeatOf ? `${view?.camera_label || "CAMERA"} REPEAT R${repeatOf}` : view?.camera_label || "SIM CAMERA",
           camera_mode: "front",
           sync_group: view?.sync_group || "missing",
+          repeat_of: repeatOf ? `R${repeatOf}` : "",
           row: view?.role || profile.row,
           sim_source: scenario.label,
           note: view
-            ? `${view.label}; independent ${view.source_type || "track"} file. ${vehicleMultiviewManifest?.note || ""}`
-            : "MTID manifest is not loaded or this view is missing.",
+            ? `${view.label}; ${repeatOf ? `repeats R${repeatOf} because only ${views.length} moving-road views are available` : `independent ${view.source_type || "track"} file`}. ${scenarioManifest()?.note || ""}`
+            : `${scenario.label} manifest is not loaded or this view is missing.`,
         },
         latest_perception: {
           obstacle_count: obstacleCount,
@@ -615,7 +652,7 @@ function buildSimulationVehicles(existingItems) {
         },
         sensor_summary: {
           fusion_status: "simulation",
-          sensors: [{ sensor_type: view ? "mtid-camera" : "missing-camera", status: view ? "online" : "offline", last_update_ts: now }],
+          sensors: [{ sensor_type: view ? `${scenarioKey}-camera` : "missing-camera", status: view ? "online" : "offline", last_update_ts: now }],
         },
       };
     });
@@ -695,7 +732,7 @@ function demoVehicleVideoHtml(robot, selectedStream) {
   if (vehicleSimulationScenario === "aligned") {
     return syntheticVehicleSceneHtml(robot, selectedStream);
   }
-  if (vehicleSimulationScenario === "mtid") {
+  if (vehicleSimulationScenario === "mtid" || vehicleSimulationScenario === "highway") {
     return multiviewVehicleVideoHtml(robot, selectedStream);
   }
   const sourceHtml = DEMO_VEHICLE_VIDEO_SOURCES.map((src) => `<source src="${escapeHtml(src)}" type="video/mp4">`).join("");
@@ -720,20 +757,22 @@ function multiviewVehicleVideoHtml(robot, selectedStream) {
   if (!view) {
     return `
       <div class="stream-note dataset-missing">
-        <strong>MTID view missing for ${escapeHtml(robot.robot_id)}</strong>
-        <div>Run tools/prepare_mtid_multiview_demo.py to generate per-view mp4 and tracks.</div>
+        <strong>${escapeHtml(currentVehicleScenario().label)} view missing for ${escapeHtml(robot.robot_id)}</strong>
+        <div>Generate or add per-view mp4 and tracks for this simulation manifest.</div>
       </div>
     `;
   }
-  const cameraLabel = view.camera_label || "MTID CAMERA";
+  const cameraLabel = robot.video_status?.camera_label || view.camera_label || "SIM CAMERA";
+  const scenarioName = vehicleSimulationScenario === "highway" ? "moving-highway" : "mtid";
+  const sourceBadge = robot.video_status?.repeat_of ? `repeat ${robot.video_status.repeat_of}` : view.sync_group || scenarioName;
   return `
-    <div class="demo-video-shell demo-video-mtid" data-track-scenario="mtid" data-track-url="${escapeHtml(view.tracks_url || "")}" data-track-profile="${escapeHtml(view.view || view.label || "")}" data-sync-group="${escapeHtml(view.sync_group || "")}">
+    <div class="demo-video-shell demo-video-${escapeHtml(scenarioName)}" data-track-scenario="${escapeHtml(vehicleSimulationScenario)}" data-track-url="${escapeHtml(view.tracks_url || "")}" data-track-profile="${escapeHtml(view.view || view.label || "")}" data-sync-group="${escapeHtml(view.sync_group || "")}">
       <video class="demo-vehicle-video" autoplay muted loop playsinline preload="auto" data-robot-id="${escapeHtml(robot.robot_id)}" data-stream="${escapeHtml(selectedStream)}">
         <source src="${escapeHtml(view.video_url || "")}" type="video/mp4">
       </video>
       ${vehicleClipOverlayHtml(robot)}
       <span class="demo-video-badge">${escapeHtml(cameraLabel)}</span>
-      <span class="demo-video-source-badge real-source">${escapeHtml(view.sync_group || "MTID")}</span>
+      <span class="demo-video-source-badge real-source">${escapeHtml(sourceBadge)}</span>
     </div>
   `;
 }
@@ -873,8 +912,9 @@ function applyVehicleScenario(value, { enableSimulation = true, announce = true 
         : "Browser-playable streams";
     }
   }
-  if (vehicleSimulationScenario === "mtid") {
-    loadVehicleMultiviewManifest()
+  if (vehicleSimulationScenario === "mtid" || vehicleSimulationScenario === "highway") {
+    const loadManifest = vehicleSimulationScenario === "highway" ? loadHighwayMovingManifest : loadVehicleMultiviewManifest;
+    loadManifest()
       .then(() => {
         videoWallRenderKey = "";
         renderVideoWall(robotsCache);
@@ -883,7 +923,7 @@ function applyVehicleScenario(value, { enableSimulation = true, announce = true 
         resetVehicleTrackLoop();
       })
       .catch((err) => {
-        setDiagStatus(`MTID manifest unavailable: ${String(err.message || err)}`);
+        setDiagStatus(`${currentVehicleScenario().label} manifest unavailable: ${String(err.message || err)}`);
       });
   }
 }
@@ -1009,7 +1049,7 @@ function highwayPerceptionForRobot(robot) {
 }
 
 function usesSharedHighwayDemoSource() {
-  return vehicleSimulationMode && vehicleSimulationScenario === "highway" && DEMO_VEHICLE_UNIQUE_SOURCE_COUNT === 1;
+  return false;
 }
 
 function updateHighwayTrackOverlays() {
@@ -1098,6 +1138,8 @@ function resetVehicleTrackLoop() {
   const preload =
     vehicleSimulationScenario === "mtid"
       ? loadVehicleMultiviewManifest().then((manifest) => Promise.all((manifest.views || []).map((view) => loadVehicleTrackSet(view.tracks_url))))
+      : vehicleSimulationScenario === "highway"
+      ? loadHighwayMovingManifest().then((manifest) => Promise.all((manifest.views || []).map((view) => loadVehicleTrackSet(view.tracks_url))))
       : loadHighwayVehicleTracks();
   preload
     .then(() => updateHighwayTrackOverlays())
@@ -2074,6 +2116,8 @@ function renderMapSummaryGrid(items) {
       const sourceLabel = highwayPerception
         ? sharedSecondary
           ? "same demo source as R1"
+          : robot.video_status?.repeat_of
+          ? `repeat ${robot.video_status.repeat_of}`
           : vehicleSimulationScenario === "mtid" &&
             robot.video_status?.sync_group &&
             primaryMultiviewSyncGroup() &&
@@ -2126,6 +2170,7 @@ function renderRiskMap(items) {
     : robots;
   const rawObstacles = robots.flatMap((robot, idx) => {
     if (usesSharedHighwayDemoSource() && idx > 0) return [];
+    if (robot.video_status?.repeat_of) return [];
     if (
       activeSyncGroup &&
       robot.video_status?.sync_group &&
@@ -3367,9 +3412,10 @@ async function boot() {
   if (videoQualityStatus && vehicleSimulationMode) {
     videoQualityStatus.textContent = `Vehicle sim: ${currentVehicleScenario().label}`;
   }
-  if (vehicleSimulationMode && vehicleSimulationScenario === "mtid") {
-    await loadVehicleMultiviewManifest().catch((err) => {
-      setDiagStatus(`MTID manifest unavailable: ${String(err.message || err)}`);
+  if (vehicleSimulationMode && (vehicleSimulationScenario === "mtid" || vehicleSimulationScenario === "highway")) {
+    const loadManifest = vehicleSimulationScenario === "highway" ? loadHighwayMovingManifest : loadVehicleMultiviewManifest;
+    await loadManifest().catch((err) => {
+      setDiagStatus(`${currentVehicleScenario().label} manifest unavailable: ${String(err.message || err)}`);
     });
   }
   resetRiskAnimation();
