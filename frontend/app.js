@@ -55,14 +55,14 @@ const VEHICLE_SIM_SCENARIOS = {
     note: "State-aligned synthetic perception scene.",
   },
   highway: {
-    label: "Highway Clip + Overlay",
+    label: "Legacy Single Highway Clip",
     mode: "video",
-    note: "Browser-playable highway mp4 with YOLO vehicle tracks rendered frame by frame.",
+    note: "Single-camera fallback only. It is not used for the multi-agent demo wall.",
   },
   mtid: {
-    label: "MTID Multiview Dataset",
+    label: "BMVC/I-24 Style Multiview",
     mode: "video",
-    note: "Real MTID multi-view clips; each robot card uses its own video file and track JSON.",
+    note: "Real multi-view clips; each robot card uses its own video file and track JSON.",
   },
 };
 const HIGHWAY_TRACKS_URL = "./assets/highway-vehicle-tracks.json";
@@ -399,6 +399,7 @@ function demoVehicleCount() {
 }
 
 function normalizeVehicleScenario(value) {
+  if (value === "highway" || value === "i24" || value === "bmvc") return "mtid";
   return Object.prototype.hasOwnProperty.call(VEHICLE_SIM_SCENARIOS, value) ? value : "aligned";
 }
 
@@ -422,6 +423,10 @@ function multiviewViewForIndex(idx) {
 function multiviewViewForRobot(robotId) {
   const id = String(robotId || "");
   return multiviewViews().find((view) => String(view.robot_id || "") === id) || null;
+}
+
+function primaryMultiviewSyncGroup() {
+  return multiviewViews()[0]?.sync_group || "";
 }
 
 async function loadVehicleMultiviewManifest() {
@@ -932,19 +937,20 @@ function detectorSvgForFrame(frame, robotId) {
       const ty = Math.max(18, y - 10);
       const cx = x + w / 2;
       const cy = y + h / 2;
-      const corner = Math.max(18, Math.min(44, Math.min(w, h) * 0.32));
+      const corner = Math.max(10, Math.min(24, Math.min(w, h) * 0.22));
+      const labelWidth = Math.max(94, Math.min(132, w + 34));
       return `
         <g class="clip-real-detection" data-track-id="${escapeHtml(det.track_id || "")}">
-          <rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="${color}" stroke-width="4" />
+          <rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="${color}" stroke-width="2.2" />
           <path d="M ${x} ${y + corner} L ${x} ${y} L ${x + corner} ${y}
                    M ${x + w - corner} ${y} L ${x + w} ${y} L ${x + w} ${y + corner}
                    M ${x + w} ${y + h - corner} L ${x + w} ${y + h} L ${x + w - corner} ${y + h}
                    M ${x + corner} ${y + h} L ${x} ${y + h} L ${x} ${y + h - corner}"
-                fill="none" stroke="${color}" stroke-width="8" stroke-linecap="square" />
-          <line x1="${cx}" y1="${cy - 18}" x2="${cx}" y2="${cy + 18}" stroke="${color}" stroke-width="3" opacity="0.9" />
-          <line x1="${cx - 18}" y1="${cy}" x2="${cx + 18}" y2="${cy}" stroke="${color}" stroke-width="3" opacity="0.9" />
-          <rect x="${tx}" y="${ty - 24}" width="170" height="24" fill="rgba(0,0,0,0.72)" stroke="${color}" stroke-width="2" />
-          <text x="${tx + 7}" y="${ty - 8}" fill="#fff" font-size="17" font-family="IBM Plex Mono, monospace">${escapeHtml(label)} ${escapeHtml(confidence)}</text>
+                fill="none" stroke="${color}" stroke-width="4" stroke-linecap="square" />
+          <line x1="${cx}" y1="${cy - 10}" x2="${cx}" y2="${cy + 10}" stroke="${color}" stroke-width="1.8" opacity="0.86" />
+          <line x1="${cx - 10}" y1="${cy}" x2="${cx + 10}" y2="${cy}" stroke="${color}" stroke-width="1.8" opacity="0.86" />
+          <rect x="${tx}" y="${ty - 20}" width="${labelWidth}" height="20" fill="rgba(0,0,0,0.68)" stroke="${color}" stroke-width="1.4" />
+          <text x="${tx + 5}" y="${ty - 6}" fill="#fff" font-size="12" font-family="IBM Plex Mono, monospace">${escapeHtml(label)} ${escapeHtml(confidence)}</text>
         </g>
       `;
     })
@@ -2068,6 +2074,11 @@ function renderMapSummaryGrid(items) {
       const sourceLabel = highwayPerception
         ? sharedSecondary
           ? "same demo source as R1"
+          : vehicleSimulationScenario === "mtid" &&
+            robot.video_status?.sync_group &&
+            primaryMultiviewSyncGroup() &&
+            robot.video_status.sync_group !== primaryMultiviewSyncGroup()
+          ? `independent segment ${robot.video_status.sync_group}`
           : `frame ${highwayPerception.frame?.frame ?? "-"}`
         : `role ${coord.role || "independent"}`;
       return `
@@ -2109,8 +2120,19 @@ function renderRiskMap(items) {
 
   const width = 760;
   const height = 390;
+  const activeSyncGroup = vehicleSimulationScenario === "mtid" ? primaryMultiviewSyncGroup() : "";
+  const mapRobots = activeSyncGroup
+    ? robots.filter((robot) => !robot.video_status?.sync_group || robot.video_status.sync_group === activeSyncGroup)
+    : robots;
   const rawObstacles = robots.flatMap((robot, idx) => {
     if (usesSharedHighwayDemoSource() && idx > 0) return [];
+    if (
+      activeSyncGroup &&
+      robot.video_status?.sync_group &&
+      robot.video_status.sync_group !== activeSyncGroup
+    ) {
+      return [];
+    }
     const sourceObstacles =
       vehicleSimulationMode && isDetectorVehicleScenario()
         ? highwayPerceptionForRobot(robot).obstacles
@@ -2151,8 +2173,8 @@ function renderRiskMap(items) {
         status: kinectSource?.online === false ? "offline" : "online",
       }
     : null;
-  const xs = robots.map((robot) => Number(robot.pose.x)).concat(allObstacles.map((obs) => Number(obs.x)));
-  const ys = robots.map((robot) => Number(robot.pose.y)).concat(allObstacles.map((obs) => Number(obs.y)));
+  const xs = mapRobots.map((robot) => Number(robot.pose.x)).concat(allObstacles.map((obs) => Number(obs.x)));
+  const ys = mapRobots.map((robot) => Number(robot.pose.y)).concat(allObstacles.map((obs) => Number(obs.y)));
   if (kinectRange) {
     xs.push(kinectRange.x, kinectRange.x + kinectRange.range_m);
     ys.push(kinectRange.y, kinectRange.y - 2.2, kinectRange.y + 0.8);
@@ -2180,7 +2202,7 @@ function renderRiskMap(items) {
     `;
   }).join("");
 
-  const fovMarks = robots
+  const fovMarks = mapRobots
     .map((robot, idx) => {
       const [rx, ry] = [scaleX(Number(robot.pose.x)), scaleY(Number(robot.pose.y))];
       const [lx, ly] = headingPoint(robot, 3.4, -1.25);
@@ -2234,7 +2256,7 @@ function renderRiskMap(items) {
     })
     .join("");
 
-  const robotMarks = robots
+  const robotMarks = mapRobots
     .map((robot, idx) => {
       const px = scaleX(Number(robot.pose.x));
       const py = scaleY(Number(robot.pose.y));
@@ -2255,10 +2277,10 @@ function renderRiskMap(items) {
     })
     .join("");
 
-  const links = robots
+  const links = mapRobots
     .flatMap((robot) =>
       (robot.coordination?.neighbors || []).map((neighbor) => {
-        const peer = robots.find((item) => item.robot_id === neighbor.robot_id);
+        const peer = mapRobots.find((item) => item.robot_id === neighbor.robot_id);
         if (!peer) return "";
         const risk = normalizedRiskLevel(neighbor.risk_level);
         const mx = (scaleX(Number(robot.pose.x)) + scaleX(Number(peer.pose.x))) / 2;
@@ -3329,8 +3351,8 @@ async function boot() {
     localStorage.setItem("autofleet_vehicle_simulation", "on");
   }
   const vehicleSceneParam = urlParams.get("vehicle_scene");
-  if (vehicleSceneParam === "aligned" || vehicleSceneParam === "highway" || vehicleSceneParam === "mtid") {
-    vehicleSimulationScenario = vehicleSceneParam;
+  if (vehicleSceneParam === "aligned" || vehicleSceneParam === "highway" || vehicleSceneParam === "mtid" || vehicleSceneParam === "i24" || vehicleSceneParam === "bmvc") {
+    vehicleSimulationScenario = normalizeVehicleScenario(vehicleSceneParam);
     localStorage.setItem("autofleet_vehicle_simulation_scenario", vehicleSimulationScenario);
   }
   const vehicleCountParam = Number(urlParams.get("vehicle_count"));
