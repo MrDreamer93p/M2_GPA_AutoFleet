@@ -557,6 +557,44 @@ function simulationVehicleProfile(idx) {
   return profiles[idx % profiles.length];
 }
 
+function mtidCameraProfile(idx) {
+  const profiles = [
+    {
+      x: -0.65,
+      y: 1.25,
+      yaw: -0.08,
+      role: "infra camera north",
+      minPeerDistanceM: 1.85,
+      neighborId: "R2",
+    },
+    {
+      x: -0.8,
+      y: -0.75,
+      yaw: 0.02,
+      role: "drone overhead",
+      minPeerDistanceM: 1.85,
+      neighborId: "R1",
+    },
+    {
+      x: 1.35,
+      y: 1.75,
+      yaw: -0.18,
+      role: "infra camera east",
+      minPeerDistanceM: 2.2,
+      neighborId: "R1",
+    },
+    {
+      x: 1.25,
+      y: -1.35,
+      yaw: 0.12,
+      role: "extra fixed camera",
+      minPeerDistanceM: 2.65,
+      neighborId: "R2",
+    },
+  ];
+  return profiles[idx % profiles.length];
+}
+
 function sharedSimulationObstacle(phase, scenarioKey = vehicleSimulationScenario) {
   if (scenarioKey === "highway") {
     return {
@@ -602,18 +640,20 @@ function buildSimulationVehicles(existingItems) {
       const repeatOf = view && idx >= views.length ? views.length : 0;
       const robotId = `R${idx + 1}`;
       const profile = simulationVehicleProfile(idx);
-      const x = profile.baseX + idx * 0.34 + Math.sin(phase + idx * 0.62) * 0.08;
-      const y = profile.baseY + Math.cos(phase * 0.55 + idx) * 0.1;
+      const fixedCamera = scenarioKey === "mtid" ? mtidCameraProfile(idx) : null;
+      const x = fixedCamera ? fixedCamera.x : profile.baseX + idx * 0.34 + Math.sin(phase + idx * 0.62) * 0.08;
+      const y = fixedCamera ? fixedCamera.y : profile.baseY + Math.cos(phase * 0.55 + idx) * 0.1;
+      const yaw = fixedCamera ? fixedCamera.yaw : Math.sin(phase * 0.46 + idx) * 0.07;
       const perception = highwayPerceptionByRobot.get(String(robotId));
       const obstacleCount = perception?.obstacles?.length || 0;
       const risk = highestRiskFromObstacles(perception?.obstacles || []) || "LOW";
       return {
         robot_id: robotId,
         online: true,
-        state: "SIMULATION",
+        state: fixedCamera ? "FIXED_CAMERA" : "SIMULATION",
         battery: 0.82 - idx * 0.04,
         last_seen_age_s: 0,
-        pose: { x, y, yaw: Math.sin(phase * 0.46 + idx) * 0.07 },
+        pose: { x, y, yaw },
         controls: { linear_x: 0, angular_z: 0 },
         motors: { left_rpm: 0, right_rpm: 0 },
         latest_ack: { status: "simulated" },
@@ -628,7 +668,7 @@ function buildSimulationVehicles(existingItems) {
           camera_mode: "front",
           sync_group: view?.sync_group || "missing",
           repeat_of: repeatOf ? `R${repeatOf}` : "",
-          row: view?.role || profile.row,
+          row: view?.role || fixedCamera?.role || profile.row,
           sim_source: scenario.label,
           note: view
             ? `${view.label}; ${repeatOf ? `repeats R${repeatOf} because only ${views.length} moving-road views are available` : `independent ${view.source_type || "track"} file`}. ${scenarioManifest()?.note || ""}`
@@ -645,10 +685,14 @@ function buildSimulationVehicles(existingItems) {
           obstacles: perception?.obstacles || [],
         },
         coordination: {
-          role: view?.role || profile.role,
+          role: fixedCamera?.role || view?.role || profile.role,
           collision_risk: risk,
-          min_peer_distance_m: idx === 0 ? 2.2 : 2.0 + idx * 0.42 + Math.cos(phase + idx) * 0.16,
-          neighbors: idx > 0 ? [{ robot_id: "R1", distance_m: 2.1 + idx * 0.42 + Math.sin(phase + idx) * 0.18, risk_level: risk }] : [],
+          min_peer_distance_m: fixedCamera ? fixedCamera.minPeerDistanceM : idx === 0 ? 2.2 : 2.0 + idx * 0.42 + Math.cos(phase + idx) * 0.16,
+          neighbors: fixedCamera?.neighborId
+            ? [{ robot_id: fixedCamera.neighborId, distance_m: fixedCamera.minPeerDistanceM, risk_level: risk }]
+            : idx > 0
+            ? [{ robot_id: "R1", distance_m: 2.1 + idx * 0.42 + Math.sin(phase + idx) * 0.18, risk_level: risk }]
+            : [],
         },
         sensor_summary: {
           fusion_status: "simulation",
@@ -2164,20 +2208,10 @@ function renderRiskMap(items) {
 
   const width = 760;
   const height = 390;
-  const activeSyncGroup = vehicleSimulationScenario === "mtid" ? primaryMultiviewSyncGroup() : "";
-  const mapRobots = activeSyncGroup
-    ? robots.filter((robot) => !robot.video_status?.sync_group || robot.video_status.sync_group === activeSyncGroup)
-    : robots;
+  const mapRobots = robots;
   const rawObstacles = robots.flatMap((robot, idx) => {
     if (usesSharedHighwayDemoSource() && idx > 0) return [];
     if (robot.video_status?.repeat_of) return [];
-    if (
-      activeSyncGroup &&
-      robot.video_status?.sync_group &&
-      robot.video_status.sync_group !== activeSyncGroup
-    ) {
-      return [];
-    }
     const sourceObstacles =
       vehicleSimulationMode && isDetectorVehicleScenario()
         ? highwayPerceptionForRobot(robot).obstacles
