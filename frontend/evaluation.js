@@ -84,7 +84,10 @@ async function inspectRun(id) {
   $("run-meta").textContent = `${report.source.kind} · ${report.source.dataset} · suite ${report.suite_version} · run ${report.run_id}`;
   $("metric-cards").replaceChildren();
   for (const [label, value] of [["Precision", report.perception.precision], ["Recall", report.perception.recall], ["mAP @ configured IoU", report.perception.map_at_iou], ["ADE / m", report.planning.ade_m], ["FDE / m", report.planning.fde_m], ["Parking success", report.planning.parking_success_rate]]) {
-    const card = node("div", undefined, "metric-card"); card.append(node("span", label), node("strong", format(value))); $("metric-cards").append(card);
+    const card = node("div", undefined, "metric-card");
+    const display = node("strong", value === null || value === undefined ? "N/A" : format(value));
+    if (value === null || value === undefined) display.title = "Unavailable for this input or observation coverage";
+    card.append(node("span", label), display); $("metric-cards").append(card);
   }
   $("exports").replaceChildren();
   for (const [label, suffix] of [["HTML report", "/report.html"], ["Failure CSV", "/failures.csv"], ["Input JSON", "/input"], ["Report JSON", ""]]) {
