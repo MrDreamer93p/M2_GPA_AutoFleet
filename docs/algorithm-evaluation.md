@@ -51,7 +51,12 @@ Trajectory fields: `scenario_id`, `kind` (`driving` or `parking`), `reference` a
 `samples`, each with `t_s/x_m/y_m/yaw_rad/speed_mps`. Units are seconds, metres,
 radians and signed longitudinal metres/second. Observed samples may include
 `obstacles` with IDs, positions, velocities and radii, and externally recorded
-`collision` flags. Reference/sample alignment is one-to-one within
+`collision` flags. Missing/null obstacles mean **unobserved**; an explicit empty
+list means an observed empty scene. Collision evidence is available when each
+sample has obstacle observations or an explicit collision flag. Partial obstacle
+coverage makes global TTC/clearance unavailable, rather than averaging away the
+unobserved scenarios; parking success cannot pass without collision observations.
+Reference/sample alignment is one-to-one within
 `alignment_tolerance_s` (default 1 ms); no missing prediction is interpolated away.
 Incomplete coverage is an automatic blocking check. FDE is unavailable without
 an observed final reference timestamp. ADE/FDE are averaged per scenario; coverage
@@ -61,10 +66,14 @@ minimum distance to the reference polyline, independent of timing error. Parking
 success requires full coverage, final position/heading tolerances and no collision.
 
 Collision checks use circumscribed planar discs at recorded samples. TTC solves
-the first contact time for constant-velocity discs; it is unavailable when there
-is no projected future contact or no obstacle data. Neither metric detects every
-between-frame collision or models braking capability. `min_ttc_s: null` is not a
-numeric infinity. Gates requiring unavailable values are blocked.
+the first contact time for constant-velocity discs. `ttc_status` distinguishes
+`observed` contact, fully observed `no_contact`, and `unavailable` observations.
+`clearance_status` similarly distinguishes `observed`, `no_obstacles` and
+`unavailable`. A no-contact/no-obstacle numeric value is null in JSON: minimum
+`>=` safety gates explicitly pass this fully observed state, `<=` gates fail it,
+and missing observation gates are blocked. Comparisons treat removal of projected
+contact as an improvement, not missing data. Neither metric detects every
+between-frame collision or models braking capability.
 
 ## Gates and comparisons
 
@@ -156,8 +165,11 @@ Official references: [synchronous mode and timestep](https://carla.readthedocs.i
 | `GET /defects?status=open&run_id={id}` | Defects and occurrence/review history |
 | `PATCH /defects/{id}` | `{status: open/resolved/ignored, note: ...}` |
 
-Repeated failures with the same truth and frame/reason/class/object identity append
-an occurrence and reopen resolved defects. Ignored defects remain ignored but
+Defects are explicitly **frame/reason/class groups**, not tracked object identities.
+The exact per-object failures remain in immutable reports and CSVs; defect groups
+store their size and up to ten representative samples. Repeated groups with the
+same truth append an occurrence and reopen resolved defects, irrespective of
+candidate-local prediction array order. Ignored defects remain ignored but
 still accumulate occurrences. A successful run does not automatically resolve
 historical defects; a person records the review and fix reference. HTML escapes
 input values; CSV protects formula-leading text. SQLite WAL and short transactions

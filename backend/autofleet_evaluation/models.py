@@ -65,8 +65,9 @@ class Obstacle(Model):
 
 
 class Sample(Pose):
-    obstacles: list[Obstacle] = Field(default_factory=list, max_length=100)
-    collision: bool = False
+    # None = not observed; [] = explicitly observed empty scene.
+    obstacles: list[Obstacle] | None = Field(default=None, max_length=100)
+    collision: bool | None = None
 
 
 class Trajectory(Model):

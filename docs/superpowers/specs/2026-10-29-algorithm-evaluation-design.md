@@ -12,7 +12,7 @@ Extend the existing Python/FastAPI and static frontend rather than replace the f
 - Detection: confidence-ranked one-to-one class-aware IoU matching, precision/recall/F1, per-class AP50 and mAP50 over classes with ground truth; per-scenario and ODD slices; FP/FN failure cases. AP50 is not COCO mAP50:95.
 - Planning: time-aligned trajectory/reference samples, ADE/FDE, polyline cross-track error, acceleration/jerk, sampled-disc overlap and constant-velocity disc TTC; final parking position and wrapped heading error. Missing reference coverage cannot pass. Collision is sampled geometry, not vehicle safety certification.
 - Versioned gate policy: explicit metric path/operator/threshold. Missing or undefined gate metric blocks acceptance. Overall and slice regression comparisons require the same evaluation truth, source, config and gates, while predictions/model version may differ.
-- Immutable run inputs and reports in SQLite, content digests, defect identity/history and recurrence on later runs. User acknowledgement or resolution never changes historical metrics. HTML/CSV exports escape user data.
+- Immutable run inputs and reports in SQLite, content digests, frame/reason/class defect groups/history and recurrence on later runs. User acknowledgement or resolution never changes historical metrics. HTML/CSV exports escape user data.
 - MTID annotations in existing assets are ground truth, not detector predictions. Track importer rejects annotation-sourced predictions, mismatched frames/timestamps or mixed resolutions, and requires declared provenance.
 - Scenario catalog includes following, cut-in, pedestrian crossing and parking parameter sets, tags, reference trajectories and gate policies. No fabricated benchmark results. Generated examples and unit fixtures are labelled synthetic.
 - Optional CARLA collector uses fixed-step synchronous world ticks and restores settings/actors; controller plugin returns real controls. Recorded trajectory and actor geometry enter the same evaluator. No CARLA server is available for external execution in this task.
@@ -22,3 +22,8 @@ Extend the existing Python/FastAPI and static frontend rather than replace the f
 ## Verification
 
 Write independent arithmetic/geometry and API persistence tests before implementation. Exercise wrong classes, duplicates, empty predictions, unlabelled frames, non-finite coordinates, gaps in trajectories, unsafe comparison and repeated defects. Run CLI/API smoke checks on explicit fixtures. Do not run benchmarks or claim model effectiveness. Review entire branch before pushing a feature branch and opening a PR; do not merge.
+
+Review rulings: absent obstacle observations are unknown, not empty; safety metrics
+must carry coverage and no-contact states. CARLA actor identities use stable
+scenario indices. Defect recurrence is deliberately at frame/reason/class scope,
+with exact per-object failures retained in immutable reports.

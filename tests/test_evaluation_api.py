@@ -70,3 +70,32 @@ def test_bad_requests_missing_ids_and_html_escaping(tmp_path):
     assert '<script>' not in html and '&lt;script&gt;' in html
     csv_text = c.get(f"/api/v1/evaluation/runs/{r['run_id']}/failures.csv").text
     assert "'=HYPERLINK" in csv_text
+
+
+def test_false_positive_defects_are_explicit_frame_class_groups(tmp_path):
+    c = client_for(tmp_path/'db'); data = image_input()
+    data['frames'][0]['ground_truth'] = []
+    data['frames'][0]['predictions'] = [
+        {'label': 'car', 'score': .9, 'box': [0, 0, .1, .1]},
+        {'label': 'car', 'score': .8, 'box': [.8, .8, .9, .9]}]
+    c.post('/api/v1/evaluation/runs', json=data)
+    defects = c.get('/api/v1/evaluation/defects').json()['items']
+    assert len(defects) == 1 and defects[0]['failure']['group_size'] == 2
+    defect_id = defects[0]['defect_id']
+    c.patch(f'/api/v1/evaluation/defects/{defect_id}', json={'status': 'resolved', 'note': 'review group'})
+    data['frames'][0]['predictions'].pop(0)
+    c.post('/api/v1/evaluation/runs', json=data)
+    defects = c.get('/api/v1/evaluation/defects').json()['items']
+    assert len(defects) == 1 and defects[0]['defect_id'] == defect_id
+    assert defects[0]['status'] == 'open' and defects[0]['failure']['group_size'] == 1
+
+
+def test_update_old_defect_is_not_limited_to_latest_listing(tmp_path):
+    from autofleet_evaluation.store import EvaluationStore
+    store = EvaluationStore(tmp_path/'db')
+    with store.connection() as db:
+        db.executemany('INSERT INTO defects VALUES (?,?,?,?,?,?)',
+                       [(str(i), 'open', 'first', 'last', 1, '{}') for i in range(1001)])
+    result = store.update_defect('0', 'resolved', 'old defect reviewed')
+    assert result['defect_id'] == '0' and result['status'] == 'resolved'
+    assert result['history'][0]['note'] == 'old defect reviewed'

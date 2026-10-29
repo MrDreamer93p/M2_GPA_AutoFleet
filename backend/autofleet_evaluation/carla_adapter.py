@@ -97,9 +97,9 @@ def collect(scenario, controller, *, candidate_version, client=None, carla_modul
             npcs.append((spawn(spec['blueprint'], spec['x_m'], spec['y_m'], spec['yaw_rad']), spec))
         for index, ref in enumerate(reference):
             current = pose(ego, ref['t_s']); current['obstacles'] = []
-            for actor, _ in npcs:
+            for npc_index, (actor, _) in enumerate(npcs):
                 transform, velocity, ext = actor.get_transform(), actor.get_velocity(), actor.bounding_box.extent
-                current['obstacles'].append({'actor_id': str(actor.id), 'x_m': transform.location.x, 'y_m': transform.location.y,
+                current['obstacles'].append({'actor_id': f'scenario-actor-{npc_index}', 'x_m': transform.location.x, 'y_m': transform.location.y,
                                              'vx_mps': velocity.x, 'vy_mps': velocity.y,
                                              'radius_m': math.hypot(ext.x, ext.y)})
             samples.append(current)

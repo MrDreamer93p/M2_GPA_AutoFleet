@@ -20,7 +20,8 @@ def numeric_metrics(report):
     return result
 
 
-HIGHER_IS_BETTER = {'precision', 'recall', 'f1', 'map50', 'map_at_iou', 'coverage', 'parking_success_rate', 'min_clearance_m', 'min_ttc_s'}
+HIGHER_IS_BETTER = {'precision', 'recall', 'f1', 'map50', 'map_at_iou', 'coverage', 'obstacle_observation_coverage',
+                    'collision_observation_coverage', 'parking_success_rate', 'min_clearance_m', 'min_ttc_s'}
 LOWER_IS_BETTER = {'ade_m', 'fde_m', 'max_cross_track_m', 'collision_scenarios', 'lane_departure_samples',
                    'max_abs_jerk_mps3', 'max_abs_acceleration_mps2', 'parking_position_error_m', 'parking_heading_error_rad'}
 
@@ -40,8 +41,17 @@ def compare_reports(baseline, candidate):
             regressed = (delta is not None and ((name in HIGHER_IS_BETTER and delta < -1e-12)
                          or (name in LOWER_IS_BETTER and delta > 1e-12)))
             regressed |= x is not None and y is None and name in HIGHER_IS_BETTER | LOWER_IS_BETTER
+            states = {}
+            if key in ('planning.min_ttc_s', 'planning.min_clearance_m'):
+                state_key = 'ttc_status' if name == 'min_ttc_s' else 'clearance_status'
+                ax, by = a['planning'][state_key], b['planning'][state_key]
+                states = {'baseline_status': ax, 'candidate_status': by}
+                infinite = {'no_contact', 'no_obstacles'}
+                if by == 'unavailable': regressed = ax != 'unavailable'
+                elif by in infinite: regressed = False
+                elif ax in infinite: regressed = True
             if regressed: regressions.append(prefix + key)
-            rows[key] = {'baseline': x, 'candidate': y, 'delta': delta, 'regressed': regressed}
+            rows[key] = {'baseline': x, 'candidate': y, 'delta': delta, 'regressed': regressed, **states}
         return rows
     metrics = compare(baseline, candidate)
     slices = {key: compare(baseline['slices'][key], candidate['slices'][key], f'{key}/')

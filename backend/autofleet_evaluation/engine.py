@@ -52,8 +52,17 @@ def evaluate(dataset: EvaluationInput):
     for gate in dataset.gates:
         actual = metric_value(report, gate.metric)
         passed = actual is not None and (actual >= gate.value if gate.op == '>=' else actual <= gate.value)
+        parent = report
+        for part in gate.metric.split('.')[:-1]:
+            parent = parent.get(part, {}) if isinstance(parent, dict) else {}
+        state_key = {'min_ttc_s': 'ttc_status', 'min_clearance_m': 'clearance_status'}.get(gate.metric.rsplit('.', 1)[-1])
+        state = parent.get(state_key) if state_key and isinstance(parent, dict) else None
+        no_contact = state in ('no_contact', 'no_obstacles')
+        if no_contact:
+            passed = gate.op == '>='
         checks.append({**gate.model_dump(), 'actual': actual,
-                       'status': 'unavailable' if actual is None else ('passed' if passed else 'failed')})
+                       **({'actual_status': state} if state else {}),
+                       'status': 'unavailable' if actual is None and not no_contact else ('passed' if passed else 'failed')})
     if dataset.trajectories and planning['coverage'] < 1:
         checks.append({'metric': 'planning.coverage', 'op': '>=', 'value': 1,
                        'actual': planning['coverage'], 'status': 'failed', 'required': True})

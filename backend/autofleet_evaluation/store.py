@@ -56,12 +56,15 @@ class EvaluationStore:
             db.execute('BEGIN IMMEDIATE')
             db.execute('INSERT INTO runs VALUES (?,?,?,?)', (report['run_id'], report['created_at'],
                        encode(dataset.model_dump(by_alias=True, mode='json')), encode(report)))
-            seen = set()
+            groups = {}
             for failure in report['failures']:
-                identity = {key: failure.get(key) for key in ('scenario_id', 'frame_id', 'reason', 'label', 'object_index')}
+                # Review units are frame/reason/class groups; prediction indices are candidate-local.
+                identity = {key: failure.get(key) for key in ('scenario_id', 'frame_id', 'reason', 'label')}
                 defect_id = digest({'truth': report['truth_digest'], 'failure': identity})
-                if defect_id in seen: continue
-                seen.add(defect_id)
+                groups.setdefault(defect_id, []).append(failure)
+            for defect_id, members in groups.items():
+                failure = {key: value for key, value in members[0].items() if key not in ('object_index', 'box', 'score')}
+                failure.update(group_size=len(members), examples=members[:10])
                 previous = db.execute('SELECT status FROM defects WHERE defect_id=?', (defect_id,)).fetchone()
                 status = 'ignored' if previous and previous['status'] == 'ignored' else 'open'
                 if previous:
@@ -99,11 +102,15 @@ class EvaluationStore:
             rows = db.execute(query, params).fetchall()
             result = []
             for row in rows:
-                item = dict(row); item['failure'] = json.loads(item['failure'])
-                item['history'] = [dict(h) for h in db.execute('SELECT at,status,note,run_id FROM history WHERE defect_id=? ORDER BY id',
-                                                            (item['defect_id'],))]
-                result.append(item)
+                result.append(self._defect(db, row))
         return result
+
+    @staticmethod
+    def _defect(db, row):
+        item = dict(row); item['failure'] = json.loads(item['failure'])
+        item['history'] = [dict(h) for h in db.execute('SELECT at,status,note,run_id FROM history WHERE defect_id=? ORDER BY id',
+                                                    (item['defect_id'],))]
+        return item
 
     def update_defect(self, defect_id, status, note):
         with self.connection() as db:
@@ -111,4 +118,5 @@ class EvaluationStore:
             changed = db.execute('UPDATE defects SET status=? WHERE defect_id=?', (status, defect_id)).rowcount
             if not changed: raise KeyError(defect_id)
             db.execute('INSERT INTO history(defect_id,at,status,note) VALUES (?,?,?,?)', (defect_id, now(), status, note))
-        return next(d for d in self.defects() if d['defect_id'] == defect_id)
+            result = self._defect(db, db.execute('SELECT * FROM defects WHERE defect_id=?', (defect_id,)).fetchone())
+        return result

@@ -55,9 +55,11 @@ def one_trajectory(t: Trajectory, config: Config):
     mids = [(a.t_s + b.t_s) / 2 for a, b in zip(t.samples, t.samples[1:])]
     jerks = [(b - a) / (mids[i + 1] - mids[i]) for i, (a, b) in enumerate(zip(accelerations, accelerations[1:]))]
     ttcs, clearances = [], []
-    collision = any(p.collision for p in t.samples)
+    collision = any(p.collision is True for p in t.samples)
+    obstacle_observed = sum(p.obstacles is not None for p in t.samples)
+    collision_observed = sum(p.obstacles is not None or p.collision is not None for p in t.samples)
     for sample in t.samples:
-        for actor in sample.obstacles:
+        for actor in sample.obstacles or []:
             clearance = math.hypot(actor.x_m - sample.x_m, actor.y_m - sample.y_m) - t.ego_radius_m - actor.radius_m
             clearances.append(clearance)
             collision |= clearance <= 0
@@ -65,18 +67,25 @@ def one_trajectory(t: Trajectory, config: Config):
             if ttc is not None:
                 ttcs.append(ttc)
     heading = angle_error(final.yaw_rad, t.reference[-1].yaw_rad) if final else None
+    collision = bool(collision) if collision or collision_observed == len(t.samples) else None
+    ttc_status = 'unavailable' if obstacle_observed < len(t.samples) else ('observed' if ttcs else 'no_contact')
+    clearance_status = 'unavailable' if obstacle_observed < len(t.samples) else ('observed' if clearances else 'no_obstacles')
     parking_success = None
     if t.kind == 'parking':
-        parking_success = (len(pairs) == len(t.reference) and fde is not None
-                           and fde <= t.parking_position_tolerance_m
-                           and heading <= t.parking_heading_tolerance_rad and not collision)
+        pose_pass = (len(pairs) == len(t.reference) and fde is not None
+                     and fde <= t.parking_position_tolerance_m and heading <= t.parking_heading_tolerance_rad)
+        parking_success = False if not pose_pass or collision is True else (True if collision is False else None)
     result = {'scenario_id': t.scenario_id, 'kind': t.kind, 'reference_samples': len(t.reference),
               'matched_samples': len(pairs), 'coverage': len(pairs) / len(t.reference),
               'ade_m': sum(errors) / len(errors) if errors else None, 'fde_m': fde,
               'max_cross_track_m': max(cross_track),
               'lane_departure_samples': sum(x > t.corridor_half_width_m for x in cross_track),
-              'collision': collision, 'min_clearance_m': min(clearances) if clearances else None,
-              'min_ttc_s': min(ttcs) if ttcs else None,
+              'collision': collision,
+              'observed_samples': len(t.samples), 'obstacle_observed_samples': obstacle_observed,
+              'collision_observed_samples': collision_observed,
+              'min_clearance_m': min(clearances) if clearances and clearance_status == 'observed' else None,
+              'clearance_status': clearance_status,
+              'min_ttc_s': min(ttcs) if ttcs and ttc_status == 'observed' else None, 'ttc_status': ttc_status,
               'max_abs_acceleration_mps2': max(map(abs, accelerations)),
               'max_abs_jerk_mps3': max(map(abs, jerks)) if jerks else None,
               'parking_position_error_m': fde if t.kind == 'parking' else None,
@@ -106,16 +115,24 @@ def evaluate_planning(trajectories: list[Trajectory], config: Config):
         v = values(key); return max(v) if v else None
     def minimum(key):
         v = values(key); return min(v) if v else None
-    parking = values('parking_success')
+    parking = [r['parking_success'] for r in rows if r['kind'] == 'parking']
     total_ref = sum(r['reference_samples'] for r in rows)
+    sample_count = sum(r['observed_samples'] for r in rows)
+    ttc_available = bool(rows) and all(r['ttc_status'] != 'unavailable' for r in rows)
+    clearance_available = bool(rows) and all(r['clearance_status'] != 'unavailable' for r in rows)
     return {'scenarios': len(rows), 'coverage': sum(r['matched_samples'] for r in rows) / total_ref if total_ref else None,
             'ade_m': mean('ade_m'), 'fde_m': mean('fde_m'), 'max_cross_track_m': maximum('max_cross_track_m'),
-            'collision_scenarios': sum(r['collision'] for r in rows) if rows else None,
+            'collision_scenarios': sum(r['collision'] for r in rows) if rows and all(r['collision'] is not None for r in rows) else None,
+            'obstacle_observation_coverage': sum(r['obstacle_observed_samples'] for r in rows) / sample_count if sample_count else None,
+            'collision_observation_coverage': sum(r['collision_observed_samples'] for r in rows) / sample_count if sample_count else None,
             'lane_departure_samples': sum(r['lane_departure_samples'] for r in rows) if rows else None,
-            'min_ttc_s': minimum('min_ttc_s'), 'min_clearance_m': minimum('min_clearance_m'),
+            'min_ttc_s': minimum('min_ttc_s') if ttc_available else None,
+            'ttc_status': ('observed' if values('min_ttc_s') else 'no_contact') if ttc_available else 'unavailable',
+            'min_clearance_m': minimum('min_clearance_m') if clearance_available else None,
+            'clearance_status': ('observed' if values('min_clearance_m') else 'no_obstacles') if clearance_available else 'unavailable',
             'max_abs_jerk_mps3': maximum('max_abs_jerk_mps3'),
             'max_abs_acceleration_mps2': maximum('max_abs_acceleration_mps2'),
             'parking_position_error_m': maximum('parking_position_error_m'),
             'parking_heading_error_rad': maximum('parking_heading_error_rad'),
-            'parking_success_rate': sum(parking) / len(parking) if parking else None,
+            'parking_success_rate': sum(parking) / len(parking) if parking and all(v is not None for v in parking) else None,
             'per_scenario': rows}, failures

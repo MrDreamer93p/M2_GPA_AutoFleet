@@ -76,3 +76,13 @@ def test_collector_rejects_other_world_without_loading_it():
     with pytest.raises(ValueError, match='map'):
         collect(data, lambda s: {}, client=NS(get_world=lambda: world), carla_module=FakeCarla, candidate_version='fixture')
     assert world.actors == []
+
+
+def test_repeated_collection_uses_stable_scenario_actor_identity():
+    from autofleet_evaluation.carla_adapter import collect
+    from autofleet_evaluation.engine import evaluate
+    world = World(); data = scenario()
+    data['actors'] = [{'blueprint': 'vehicle.test', 'x_m': 10, 'y_m': 0, 'yaw_rad': 0, 'vx_mps': 0, 'vy_mps': 0}]
+    reports = [evaluate(collect(data, lambda state: {'brake': 1}, client=NS(get_world=lambda: world),
+                                carla_module=FakeCarla, candidate_version=str(i))) for i in range(2)]
+    assert reports[0]['truth_digest'] == reports[1]['truth_digest']

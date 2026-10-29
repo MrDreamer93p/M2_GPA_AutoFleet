@@ -90,7 +90,7 @@ async function inspectRun(id) {
   for (const [label, suffix] of [["HTML report", "/report.html"], ["Failure CSV", "/failures.csv"], ["Input JSON", "/input"], ["Report JSON", ""]]) {
     const link = node("a", label, "btn subtle compact"); link.href = `${apiBase}/evaluation/runs/${encodeURIComponent(id)}${suffix}`; link.target = "_blank"; link.rel = "noopener"; $("exports").append(link);
   }
-  table("gates", ["Metric", "Requirement", "Actual", "Status"], report.gate.checks.map(c => [c.metric, `${c.op} ${c.value}`, c.actual, c.status]));
+  table("gates", ["Metric", "Requirement", "Actual", "Status"], report.gate.checks.map(c => [c.metric, `${c.op} ${c.value}`, c.actual_status && c.actual === null ? c.actual_status : c.actual, c.status]));
   table("slices", ["Slice", "Labelled frames", "Precision", "Recall", "FDE / m", "Coverage"], Object.entries(report.slices).map(([key, s]) => [key, s.perception.labelled_frames, s.perception.precision, s.perception.recall, s.planning.fde_m, s.planning.coverage]));
   renderTrajectories(report.planning.per_scenario); renderFailures();
   $("provenance").textContent = JSON.stringify({ source: report.source, input_digest: report.input_digest, truth_digest: report.truth_digest, policy_digest: report.policy_digest, engine: report.engine_version, limitations: report.limitations }, null, 2);

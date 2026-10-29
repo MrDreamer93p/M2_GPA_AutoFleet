@@ -19,7 +19,7 @@ def trajectory_input():
     d = image_input(); d['frames'] = []; d['gates'] = []
     ref = [{'t_s': i, 'x_m': i, 'y_m': 0, 'yaw_rad': 0, 'speed_mps': 1} for i in range(3)]
     d['trajectories'] = [{'scenario_id': 'parking', 'kind': 'parking', 'tags': ['day'],
-                          'reference': ref, 'samples': copy.deepcopy(ref), 'corridor_half_width_m': 1.5}]
+                          'reference': ref, 'samples': [{**p, 'obstacles': []} for p in ref], 'corridor_half_width_m': 1.5}]
     return d
 
 
@@ -132,3 +132,35 @@ def test_incomplete_trajectory_blocks_release_even_without_coverage_gate():
     d = trajectory_input(); d['trajectories'][0]['samples'] = d['trajectories'][0]['samples'][1:]
     d['gates'] = [{'metric': 'planning.fde_m', 'op': '<=', 'value': 1}]
     assert not score(d)['gate']['passed']
+
+
+def test_unobserved_obstacles_cannot_pass_safety_or_parking_gates():
+    d = trajectory_input()
+    for sample in d['trajectories'][0]['samples']: sample.pop('obstacles')
+    d['gates'] = [{'metric': 'planning.collision_scenarios', 'op': '<=', 'value': 0},
+                  {'metric': 'planning.parking_success_rate', 'op': '>=', 'value': 1}]
+    r = score(d)
+    assert r['planning']['collision_scenarios'] is None
+    assert r['planning']['parking_success_rate'] is None
+    assert not r['gate']['passed']
+    observed = copy.deepcopy(d['trajectories'][0]); observed['scenario_id'] = 'observed'
+    for sample in observed['samples']:
+        sample['obstacles'] = [{'actor_id': 'lead', 'x_m': 6, 'y_m': 0, 'radius_m': .5}]
+    d['trajectories'].append(observed)
+    d['gates'] = [{'metric': 'planning.min_ttc_s', 'op': '>=', 'value': 1}]
+    assert not score(d)['gate']['passed']
+
+
+def test_observed_no_future_contact_is_safe_and_not_a_ttc_regression():
+    from autofleet_evaluation.reports import compare_reports
+    d = trajectory_input(); d['trajectories'][0]['kind'] = 'driving'
+    for p in d['trajectories'][0]['samples']:
+        p['obstacles'] = [{'actor_id': 'lead', 'x_m': 6, 'y_m': 0, 'radius_m': .5}]
+    d['gates'] = [{'metric': 'planning.min_ttc_s', 'op': '>=', 'value': 1}]
+    a = score(d); a['run_id'] = 'a'
+    for p in d['trajectories'][0]['samples']: p['speed_mps'] = -1
+    d['candidate_version'] = 'away'
+    b = score(d); b['run_id'] = 'b'
+    assert b['planning']['ttc_status'] == 'no_contact' and b['gate']['passed']
+    assert not compare_reports(a, b)['metrics']['planning.min_ttc_s']['regressed']
+    assert compare_reports(b, a)['metrics']['planning.min_ttc_s']['regressed']
