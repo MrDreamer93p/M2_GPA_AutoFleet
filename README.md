@@ -2,6 +2,37 @@
 
 Multi-robot supervision and V2X control stack for an educational fleet project.
 
+## Algorithm evaluation workbench
+
+The fleet stack also exposes a shared offline perception/planning evaluator through
+Python CLI, FastAPI and [`frontend/evaluation.html`](./frontend/evaluation.html).
+It scores independently labelled detector outputs, trajectory tracking and parking
+errors, mines failed samples, evaluates scenario/ODD slices, compares compatible
+versions, and persists immutable reports plus a separate defect-review history.
+The main dashboard links to **Algorithm Evaluation**.
+
+Quick start without MQTT or robot hardware:
+
+```powershell
+python -m pip install -r requirements-test.txt
+python -m uvicorn autofleet_evaluation.api:app --app-dir backend --host 127.0.0.1 --port 8201
+# In another terminal:
+python -m http.server 3000 --directory frontend
+```
+
+Open `http://127.0.0.1:3000/evaluation.html`, set the backend to
+`http://127.0.0.1:8201/api/v1`, and connect. Import an evaluation JSON, or explicitly
+load the **synthetic contract example** to check the workflow. The example contains
+an intentional miss and is not a measured model result.
+
+Docker alternative: `docker compose -f infra/compose.yml --profile evaluation up -d evaluation-api frontend`.
+The normal fleet backend serves the same `/api/v1/evaluation/*` endpoints.
+
+See [input contracts, adapters, metrics and operation](./docs/algorithm-evaluation.md).
+The optional CARLA collector requires a running, matching CARLA server; it has not
+been executed against a real simulator in this change. HIL, road tests, NCAP/SOTIF
+validation and production algorithm improvements are not claimed.
+
 This repository now includes:
 
 - `frontend/`: browser control dashboard with fleet view, video wall, alerts, protocol status, diagnostics

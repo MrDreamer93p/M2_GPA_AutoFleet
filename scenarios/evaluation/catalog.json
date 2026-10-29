@@ -1,0 +1,35 @@
+{
+  "schema": "autofleet.scenarios.v1",
+  "version": "driving-parking-v1",
+  "description": "Parameterized scenario definitions, not executed validation results. Override world coordinates for your map.",
+  "scenarios": [
+    {
+      "scenario_id": "following_brake", "category": "following", "kind": "driving", "map": "Town03", "seed": 17,
+      "weather": "ClearNoon", "tags": ["following", "day", "dry"],
+      "parameters": {"dt_s": 0.05, "duration_s": 4, "start_x_m": 0, "start_y_m": 0, "target_x_m": 20, "target_y_m": 0, "yaw_rad": 0, "spawn_z_m": 0.6, "corridor_half_width_m": 1.75},
+      "actors": [{"blueprint": "vehicle.audi.a2", "x_m": 14, "y_m": 0, "yaw_rad": 0, "vx_mps": 2, "vy_mps": 0}],
+      "gates": [{"metric": "planning.coverage", "op": ">=", "value": 1}, {"metric": "planning.collision_scenarios", "op": "<=", "value": 0}, {"metric": "planning.max_cross_track_m", "op": "<=", "value": 1.75}]
+    },
+    {
+      "scenario_id": "adjacent_cut_in", "category": "cut_in", "kind": "driving", "map": "Town03", "seed": 23,
+      "weather": "WetCloudyNoon", "tags": ["cut_in", "day", "wet"],
+      "parameters": {"dt_s": 0.05, "duration_s": 4, "start_x_m": 0, "start_y_m": 0, "target_x_m": 20, "target_y_m": 0, "yaw_rad": 0, "spawn_z_m": 0.6, "corridor_half_width_m": 1.75},
+      "actors": [{"blueprint": "vehicle.audi.a2", "x_m": 10, "y_m": 3.5, "yaw_rad": -0.2, "vx_mps": 3, "vy_mps": -0.9}],
+      "gates": [{"metric": "planning.coverage", "op": ">=", "value": 1}, {"metric": "planning.collision_scenarios", "op": "<=", "value": 0}, {"metric": "planning.fde_m", "op": "<=", "value": 3}]
+    },
+    {
+      "scenario_id": "pedestrian_crossing", "category": "pedestrian_crossing", "kind": "driving", "map": "Town03", "seed": 31,
+      "weather": "ClearSunset", "tags": ["pedestrian", "dusk", "dry"],
+      "parameters": {"dt_s": 0.05, "duration_s": 4, "start_x_m": 0, "start_y_m": 0, "target_x_m": 12, "target_y_m": 0, "yaw_rad": 0, "spawn_z_m": 0.6, "corridor_half_width_m": 1.75},
+      "actors": [{"blueprint": "walker.pedestrian.0001", "x_m": 8, "y_m": 3, "yaw_rad": -1.5707963268, "vx_mps": 0, "vy_mps": -1}],
+      "gates": [{"metric": "planning.coverage", "op": ">=", "value": 1}, {"metric": "planning.collision_scenarios", "op": "<=", "value": 0}, {"metric": "planning.max_abs_jerk_mps3", "op": "<=", "value": 10}]
+    },
+    {
+      "scenario_id": "parking_reverse", "category": "parking", "kind": "parking", "map": "Town03", "seed": 41,
+      "weather": "ClearNoon", "tags": ["parking", "day", "dry"],
+      "parameters": {"dt_s": 0.05, "duration_s": 4, "start_x_m": 0, "start_y_m": 0, "target_x_m": -4, "target_y_m": 0, "yaw_rad": 0, "spawn_z_m": 0.6, "corridor_half_width_m": 1.5},
+      "actors": [],
+      "gates": [{"metric": "planning.coverage", "op": ">=", "value": 1}, {"metric": "planning.parking_success_rate", "op": ">=", "value": 1}, {"metric": "planning.parking_position_error_m", "op": "<=", "value": 0.3}, {"metric": "planning.parking_heading_error_rad", "op": "<=", "value": 0.1}]
+    }
+  ]
+}

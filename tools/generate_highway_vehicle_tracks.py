@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -134,6 +135,8 @@ def detect_video(video, cfg, weights, names, output, preview):
 
     payload = {
         "schema": "autofleet.highway_vehicle_tracks.v1",
+        "source_type": "opencv-darknet",
+        "model_weights_sha256": hashlib.sha256(Path(weights).read_bytes()).hexdigest(),
         "source": str(video).replace("\\", "/"),
         "fps": fps,
         "width": width,
