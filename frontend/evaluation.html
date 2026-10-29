@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AutoFleet · Algorithm Evaluation</title>
+  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./evaluation.css?v=20261029-eval-v1-1">
+  <script src="./evaluation.js?v=20261029-eval-v1-2" defer></script>
+</head>
+<body>
+<main class="evaluation-shell">
+  <header class="topbar">
+    <div><p class="eyebrow">AUTOFLEET / VALIDATION</p><h1>Algorithm Evaluation</h1><p class="hint">Perception, trajectories and version regressions — with traceable inputs.</p></div>
+    <a class="btn subtle" href="./index.html">Fleet control ↗</a>
+  </header>
+  <section class="panel connection-panel" aria-labelledby="connection-heading">
+    <h2 id="connection-heading">Connect</h2>
+    <form id="connection-form" class="row"><label for="endpoint">Backend API <input id="endpoint" type="url" required spellcheck="false"></label><button class="btn subtle" type="submit">Connect / refresh</button></form>
+    <p id="notice" role="status" aria-live="polite">Connect to the fleet backend or the standalone evaluation API.</p>
+  </section>
+  <section class="panel input-panel" aria-labelledby="input-heading">
+    <div class="section-head"><h2 id="input-heading">01 / Evaluation input</h2><span class="badge">JSON · versioned</span></div>
+    <label for="dataset-file">Import labelled detections / recorded trajectories <input id="dataset-file" type="file" accept=".json,application/json"></label>
+    <details><summary>Input contract</summary><p>Normalized xyxy boxes, independent ground truth and scored predictions. Trajectories use seconds, metres, radians and signed m/s. A null ground_truth means unlabelled. Include suite, data, model versions and explicit gates.</p></details>
+    <label for="dataset-json">Dataset JSON <textarea id="dataset-json" rows="9" spellcheck="false" placeholder="Load an evaluation JSON file or the synthetic contract example."></textarea></label>
+    <div class="row"><button id="run" class="btn" type="button">Run evaluation</button><button id="example" class="btn subtle" type="button">Load synthetic example</button></div>
+    <p class="hint small">The example is a functional fixture with an intentional miss. It does not represent a trained model or a benchmark result.</p>
+  </section>
+  <section class="panel runs-panel" aria-labelledby="runs-heading">
+    <div class="section-head"><h2 id="runs-heading">02 / Recorded runs</h2><span id="run-count" class="badge">0 runs</span></div>
+    <div class="table-wrap"><table><thead><tr><th>Candidate</th><th>Source</th><th>Gate</th><th>Created</th><th>Inspect</th></tr></thead><tbody id="runs"><tr><td colspan="5">No runs loaded.</td></tr></tbody></table></div>
+    <form id="compare-form"><div class="row"><label for="baseline">Baseline <select id="baseline" required></select></label><label for="candidate">Candidate <select id="candidate" required></select></label><button class="btn subtle" type="submit">Compare versions</button></div></form>
+    <div id="comparison" aria-live="polite"></div>
+  </section>
+  <section id="detail-panel" class="panel detail-panel" aria-labelledby="detail-heading" hidden>
+    <div class="section-head"><h2 id="detail-heading">03 / Run evidence</h2><span id="gate-status" class="badge"></span></div>
+    <p id="run-meta" class="hint"></p><div id="metric-cards" class="metric-cards"></div>
+    <div id="exports" class="row"></div>
+    <h3>Acceptance checks</h3><div id="gates" class="table-wrap"></div>
+    <h3>Scenario / ODD slices</h3><div id="slices" class="table-wrap"></div>
+    <h3>Trajectory overlay</h3><div id="trajectory"><p class="hint">No trajectory samples.</p></div>
+    <h3>Failure samples</h3><label for="failure-filter">Scenario or reason <input id="failure-filter" type="search" placeholder="e.g. false_negative, parking"></label><div id="failures" class="table-wrap"></div>
+    <details><summary>Provenance and metric limitations</summary><pre id="provenance"></pre></details>
+  </section>
+  <section class="panel defects-panel" aria-labelledby="defects-heading">
+    <div class="section-head"><h2 id="defects-heading">04 / Defect follow-up</h2><label for="defect-filter">Status <select id="defect-filter"><option value="">All</option><option>open</option><option>resolved</option><option>ignored</option></select></label></div>
+    <p class="hint small">Resolving a defect records a review action. The original run stays immutable; recurrence in a later run reopens it.</p>
+    <div id="defects" class="table-wrap"></div>
+  </section>
+  <footer class="hint">Offline metrics and software interfaces. HIL, road testing and safety-standard validation require their own environments and evidence.</footer>
+</main>
+</body>
+</html>

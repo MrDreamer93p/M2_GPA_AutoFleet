@@ -34,6 +34,7 @@ services:
       - AUTOFLEET_MQTT_PORT=3889
       - AUTOFLEET_LOG_DIR=/app_data/logs
       - AUTOFLEET_RESULT_DIR=/app_data/results
+      - AUTOFLEET_EVALUATION_DB=/app_data/results/evaluation.sqlite3
       - AUTOFLEET_ARTIFACT_DIR=/app_data/artifacts
       - AUTOFLEET_VIDEO_SNAPSHOT_DIR=/app_data/artifacts/snapshots
       - AUTOFLEET_ALERT_SNAPSHOT_DIR=/app_data/artifacts/alerts
@@ -112,6 +113,19 @@ services:
       - ../data/logs:/logs:rw
     depends_on:
       - mosquitto
+
+  evaluation-api:
+    profiles: [evaluation]
+    image: python:3.11-slim
+    working_dir: /app
+    command: sh -c "pip install --no-cache-dir -r requirements.txt && uvicorn autofleet_evaluation.api:app --host 0.0.0.0 --port 8201"
+    ports:
+      - "${AUTOFLEET_EVALUATION_PORT:-8201}:8201"
+    environment:
+      - AUTOFLEET_EVALUATION_DB=/data/results/evaluation.sqlite3
+    volumes:
+      - ../backend:/app:ro
+      - ../data:/data:rw
 
   frontend:
     image: python:3.11-slim

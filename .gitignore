@@ -26,3 +26,6 @@ data/artifacts/
 .vscode/
 _simulator*.log
 _tmp_frontend_*
+.superpowers/
+output/playwright/
+.playwright-cli/

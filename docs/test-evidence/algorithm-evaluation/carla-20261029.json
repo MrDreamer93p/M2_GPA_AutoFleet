@@ -1,0 +1,350 @@
+{
+  "execution": "live_carla",
+  "server_version": "0.9.16",
+  "client_version": "0.9.16",
+  "dt_s": 0.05,
+  "scenarios": [
+    {
+      "scenario_id": "following_brake",
+      "samples": 81,
+      "gate": {
+        "passed": true,
+        "status": "passed",
+        "checks": [
+          {
+            "metric": "planning.coverage",
+            "op": ">=",
+            "value": 1.0,
+            "actual": 1.0,
+            "status": "passed"
+          },
+          {
+            "metric": "planning.collision_scenarios",
+            "op": "<=",
+            "value": 0.0,
+            "actual": 0,
+            "status": "passed"
+          },
+          {
+            "metric": "planning.max_cross_track_m",
+            "op": "<=",
+            "value": 1.75,
+            "actual": 9.511263622858119e-05,
+            "status": "passed"
+          }
+        ]
+      },
+      "metrics": {
+        "scenarios": 1,
+        "coverage": 1.0,
+        "ade_m": 2.55711842644049,
+        "fde_m": 3.758421821396606,
+        "max_cross_track_m": 9.511263622858119e-05,
+        "collision_scenarios": 0,
+        "obstacle_observation_coverage": 1.0,
+        "collision_observation_coverage": 1.0,
+        "lane_departure_samples": 0,
+        "min_ttc_s": 18.400453304591878,
+        "ttc_status": "observed",
+        "min_clearance_m": 9.065484718804413,
+        "clearance_status": "observed",
+        "max_abs_jerk_mps3": 209.22892967712488,
+        "max_abs_acceleration_mps2": 15.82682386919695,
+        "parking_position_error_m": null,
+        "parking_heading_error_rad": null,
+        "parking_success_rate": null
+      },
+      "failures": [],
+      "input_digest": "2723e995b778e80fc2006cd21e0126b8f801e93770fcdd3c3aa297aa2b9ca0f6",
+      "truth_digest": "c7db485171f436e7daa16b685c5082a489144d7c539579faca8ce0fd929bb0f7",
+      "settings_restored": true,
+      "remaining_created_vehicles": 0,
+      "wall_time_s": 0.33
+    },
+    {
+      "scenario_id": "adjacent_cut_in",
+      "samples": 81,
+      "gate": {
+        "passed": false,
+        "status": "blocked",
+        "checks": [
+          {
+            "metric": "planning.coverage",
+            "op": ">=",
+            "value": 1.0,
+            "actual": 1.0,
+            "status": "passed"
+          },
+          {
+            "metric": "planning.collision_scenarios",
+            "op": "<=",
+            "value": 0.0,
+            "actual": 0,
+            "status": "passed"
+          },
+          {
+            "metric": "planning.fde_m",
+            "op": "<=",
+            "value": 3.0,
+            "actual": 3.758421821396606,
+            "status": "failed"
+          }
+        ]
+      },
+      "metrics": {
+        "scenarios": 1,
+        "coverage": 1.0,
+        "ade_m": 2.55711842644049,
+        "fde_m": 3.758421821396606,
+        "max_cross_track_m": 9.511263622858119e-05,
+        "collision_scenarios": 0,
+        "obstacle_observation_coverage": 1.0,
+        "collision_observation_coverage": 1.0,
+        "lane_departure_samples": 0,
+        "min_ttc_s": null,
+        "ttc_status": "no_contact",
+        "min_clearance_m": 5.909114775520353,
+        "clearance_status": "observed",
+        "max_abs_jerk_mps3": 209.22892967712488,
+        "max_abs_acceleration_mps2": 15.82682386919695,
+        "parking_position_error_m": null,
+        "parking_heading_error_rad": null,
+        "parking_success_rate": null
+      },
+      "failures": [
+        {
+          "scenario_id": "adjacent_cut_in",
+          "frame_id": "gate:planning.fde_m",
+          "reason": "metric_gate_failed",
+          "label": "planning.fde_m",
+          "object_index": 0,
+          "metric": "planning.fde_m",
+          "actual": 3.758421821396606,
+          "op": "<=",
+          "threshold": 3.0,
+          "tags": []
+        }
+      ],
+      "input_digest": "35ce716f6e5d6b8b79d72a8404c248ca8873430bbf6549767997f80f16da6872",
+      "truth_digest": "45c75a045415100feb428c00a3e98b037d6a5cf2dcd8867a05dca75003fbf1a9",
+      "settings_restored": true,
+      "remaining_created_vehicles": 0,
+      "wall_time_s": 0.33
+    },
+    {
+      "scenario_id": "pedestrian_crossing",
+      "samples": 81,
+      "gate": {
+        "passed": false,
+        "status": "blocked",
+        "checks": [
+          {
+            "metric": "planning.coverage",
+            "op": ">=",
+            "value": 1.0,
+            "actual": 1.0,
+            "status": "passed"
+          },
+          {
+            "metric": "planning.collision_scenarios",
+            "op": "<=",
+            "value": 0.0,
+            "actual": 1,
+            "status": "failed"
+          },
+          {
+            "metric": "planning.max_abs_jerk_mps3",
+            "op": "<=",
+            "value": 10.0,
+            "actual": 209.22892967712488,
+            "status": "failed"
+          }
+        ]
+      },
+      "metrics": {
+        "scenarios": 1,
+        "coverage": 1.0,
+        "ade_m": 2.6232627160747937,
+        "fde_m": 4.142386849744631,
+        "max_cross_track_m": 0.00738850318609052,
+        "collision_scenarios": 1,
+        "obstacle_observation_coverage": 1.0,
+        "collision_observation_coverage": 1.0,
+        "lane_departure_samples": 0,
+        "min_ttc_s": 0.0,
+        "ttc_status": "observed",
+        "min_clearance_m": -0.4571736682605153,
+        "clearance_status": "observed",
+        "max_abs_jerk_mps3": 209.22892967712488,
+        "max_abs_acceleration_mps2": 15.82682386919695,
+        "parking_position_error_m": null,
+        "parking_heading_error_rad": null,
+        "parking_success_rate": null
+      },
+      "failures": [
+        {
+          "scenario_id": "pedestrian_crossing",
+          "frame_id": "trajectory",
+          "reason": "collision",
+          "label": "ego",
+          "object_index": 0,
+          "tags": [
+            "pedestrian",
+            "dusk",
+            "dry"
+          ]
+        },
+        {
+          "scenario_id": "pedestrian_crossing",
+          "frame_id": "trajectory",
+          "reason": "low_ttc",
+          "label": "ego",
+          "object_index": 0,
+          "tags": [
+            "pedestrian",
+            "dusk",
+            "dry"
+          ]
+        },
+        {
+          "scenario_id": "pedestrian_crossing",
+          "frame_id": "gate:planning.collision_scenarios",
+          "reason": "metric_gate_failed",
+          "label": "planning.collision_scenarios",
+          "object_index": 0,
+          "metric": "planning.collision_scenarios",
+          "actual": 1,
+          "op": "<=",
+          "threshold": 0.0,
+          "tags": []
+        },
+        {
+          "scenario_id": "pedestrian_crossing",
+          "frame_id": "gate:planning.max_abs_jerk_mps3",
+          "reason": "metric_gate_failed",
+          "label": "planning.max_abs_jerk_mps3",
+          "object_index": 0,
+          "metric": "planning.max_abs_jerk_mps3",
+          "actual": 209.22892967712488,
+          "op": "<=",
+          "threshold": 10.0,
+          "tags": []
+        }
+      ],
+      "input_digest": "5575f21f38e4281c3ebc712dc9eb44335f2d265a4946c41c3b37206c5864baf1",
+      "truth_digest": "1828b90c5eb2488ff38358d3365c22880a9cb1808e7c50a92e2cd45b7fd96f4d",
+      "settings_restored": true,
+      "remaining_created_vehicles": 0,
+      "wall_time_s": 0.39
+    },
+    {
+      "scenario_id": "parking_reverse",
+      "samples": 81,
+      "gate": {
+        "passed": false,
+        "status": "blocked",
+        "checks": [
+          {
+            "metric": "planning.coverage",
+            "op": ">=",
+            "value": 1.0,
+            "actual": 1.0,
+            "status": "passed"
+          },
+          {
+            "metric": "planning.parking_success_rate",
+            "op": ">=",
+            "value": 1.0,
+            "actual": 0.0,
+            "status": "failed"
+          },
+          {
+            "metric": "planning.parking_position_error_m",
+            "op": "<=",
+            "value": 0.3,
+            "actual": 3.5412719823180634,
+            "status": "failed"
+          },
+          {
+            "metric": "planning.parking_heading_error_rad",
+            "op": "<=",
+            "value": 0.1,
+            "actual": 0.0002704507706300023,
+            "status": "passed"
+          }
+        ]
+      },
+      "metrics": {
+        "scenarios": 1,
+        "coverage": 1.0,
+        "ade_m": 1.8429966452954618,
+        "fde_m": 3.5412719823180634,
+        "max_cross_track_m": 0.00046909473669299527,
+        "collision_scenarios": 0,
+        "obstacle_observation_coverage": 1.0,
+        "collision_observation_coverage": 1.0,
+        "lane_departure_samples": 0,
+        "min_ttc_s": null,
+        "ttc_status": "no_contact",
+        "min_clearance_m": null,
+        "clearance_status": "no_obstacles",
+        "max_abs_jerk_mps3": 171.51011823161545,
+        "max_abs_acceleration_mps2": 8.578824853074725,
+        "parking_position_error_m": 3.5412719823180634,
+        "parking_heading_error_rad": 0.0002704507706300023,
+        "parking_success_rate": 0.0
+      },
+      "failures": [
+        {
+          "scenario_id": "parking_reverse",
+          "frame_id": "trajectory",
+          "reason": "parking_tolerance",
+          "label": "ego",
+          "object_index": 0,
+          "tags": [
+            "parking",
+            "day",
+            "dry"
+          ]
+        },
+        {
+          "scenario_id": "parking_reverse",
+          "frame_id": "gate:planning.parking_success_rate",
+          "reason": "metric_gate_failed",
+          "label": "planning.parking_success_rate",
+          "object_index": 0,
+          "metric": "planning.parking_success_rate",
+          "actual": 0.0,
+          "op": ">=",
+          "threshold": 1.0,
+          "tags": []
+        },
+        {
+          "scenario_id": "parking_reverse",
+          "frame_id": "gate:planning.parking_position_error_m",
+          "reason": "metric_gate_failed",
+          "label": "planning.parking_position_error_m",
+          "object_index": 0,
+          "metric": "planning.parking_position_error_m",
+          "actual": 3.5412719823180634,
+          "op": "<=",
+          "threshold": 0.3,
+          "tags": []
+        }
+      ],
+      "input_digest": "f022c7ebe4bc017ca13b7f1cb58f35d25e934c7ff126783225cb5f8823b50aa4",
+      "truth_digest": "48d3f4c85ce0661530b1d9d0a2d8a7c187feebbd1e58708f401334184a6d1f1a",
+      "settings_restored": true,
+      "remaining_created_vehicles": 0,
+      "wall_time_s": 0.27
+    }
+  ],
+  "limitations": "Reference controller verification in controlled software scenarios; the report separates harness completion from controller acceptance.",
+  "map": "Town10HD_Opt",
+  "settling_ticks": 20,
+  "engine_version": "1.2.0",
+  "executed_at": "2026-10-29",
+  "no_rendering_mode": true,
+  "fixed_snapshot_priming": true,
+  "integration_checks_passed": true
+}

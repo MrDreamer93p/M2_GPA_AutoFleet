@@ -14,6 +14,8 @@ from fastapi.responses import StreamingResponse
 
 from autofleet_backend.app_state import AppState
 from autofleet_backend.config import settings
+from autofleet_evaluation.api import create_router as create_evaluation_router, default_db_path
+from autofleet_evaluation.store import EvaluationStore
 from autofleet_backend.models import (
     AlertAckRequest,
     CommandRequest,
@@ -38,6 +40,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="AutoFleet Backend", version="0.2.0", lifespan=lifespan)
+app.include_router(create_evaluation_router(EvaluationStore(default_db_path())))
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

@@ -1,0 +1,15 @@
+.evaluation-shell{width:min(1440px,94vw);margin:24px auto 50px;display:grid;grid-template-columns:1fr 1.25fr;gap:18px}
+.evaluation-shell .topbar,.connection-panel,.detail-panel,.defects-panel,.evaluation-shell footer{grid-column:1/-1}
+.evaluation-shell .topbar{align-items:center}.eyebrow{font:12px "IBM Plex Mono",monospace;letter-spacing:.14em;color:var(--accent);margin:0 0 8px}
+.evaluation-shell h1{font-size:clamp(25px,3.5vw,42px);margin:0 0 8px}.evaluation-shell h2{font-size:20px}.evaluation-shell h3{margin-top:28px}
+.evaluation-shell .panel{padding:22px;min-width:0}.row{display:flex;gap:14px;align-items:end;flex-wrap:wrap;margin:14px 0}.row label{flex:1;min-width:180px}
+.evaluation-shell label{display:grid;gap:8px;margin:12px 0;font-size:14px}.evaluation-shell textarea{width:100%;resize:vertical;font:13px/1.5 "IBM Plex Mono",monospace;background:var(--bg-alt);color:var(--text);border:1px solid var(--line-soft);padding:12px;box-sizing:border-box}
+.evaluation-shell input,.evaluation-shell select{max-width:100%;min-height:40px}.evaluation-shell input[type=file]{padding:9px;border:1px dashed var(--line-soft)}
+.evaluation-shell :focus-visible{outline:3px solid var(--accent);outline-offset:3px}.evaluation-shell button:disabled{opacity:.55;cursor:wait}.evaluation-shell details{margin:16px 0}.evaluation-shell summary{cursor:pointer;font-weight:600}.evaluation-shell pre{white-space:pre-wrap;overflow-wrap:anywhere}
+.metric-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px;margin:20px 0}.metric-card{border:1px solid var(--line-soft);border-top:4px solid var(--accent);padding:16px}.metric-card strong{display:block;font-size:27px;margin-top:8px}.metric-card span{font-size:13px;color:var(--muted)}
+.evaluation-shell td,.evaluation-shell th{font-size:13px;vertical-align:top}.evaluation-shell td{overflow-wrap:anywhere;max-width:380px}.evaluation-shell .table-wrap{max-height:420px;overflow:auto}.evaluation-shell th{position:sticky;top:0;background:var(--surface);z-index:1}
+.pass{color:var(--ok)}.blocked,.error{color:var(--bad)}.evaluation-shell .badge{white-space:normal}.evaluation-shell .compact{padding:7px 10px;font-size:12px;min-height:34px}
+#notice{margin-bottom:0}#trajectory svg{width:100%;height:300px;display:block;border:1px solid var(--line-soft);background:var(--bg-alt)}.trajectory-caption{font:12px monospace;color:var(--muted)}
+#comparison{margin-top:16px;min-width:0;max-width:100%}#comparison>p{font-weight:600}.defect-editor{min-width:230px}.defect-editor textarea{min-height:60px}.defect-editor select{width:100%}
+.metric-card{min-width:0}.metric-card strong{overflow-wrap:anywhere}.evaluation-shell .table-wrap{max-width:100%}
+@media(max-width:900px){.evaluation-shell{grid-template-columns:minmax(0,1fr)}.evaluation-shell .panel{grid-column:1/-1}.evaluation-shell .topbar{align-items:start;gap:18px;flex-direction:column}.metric-cards{grid-template-columns:repeat(2,minmax(0,1fr))}.metric-card strong{font-size:clamp(17px,4vw,27px)}}
