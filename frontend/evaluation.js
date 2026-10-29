@@ -133,7 +133,7 @@ $("defect-filter").addEventListener("change", () => loadDefects().catch(e => mes
 $("compare-form").addEventListener("submit", e => { e.preventDefault(); busy(e.submitter, async () => {
   const result = await request(`/compare?baseline=${encodeURIComponent($("baseline").value)}&candidate=${encodeURIComponent($("candidate").value)}`);
   const summary = node("p", `${result.regressed_metrics.length} regressed metrics / slices · candidate gate ${result.candidate_gate.status}`, result.regression_free ? "pass" : "blocked");
-  const container = node("div");
+  const container = node("div", undefined, "table-wrap");
   const rows = Object.entries(result.metrics).filter(([, v]) => v.baseline !== null || v.candidate !== null).map(([k, v]) => [k, v.baseline, v.candidate, v.delta, v.regressed ? "Regressed" : "—"]);
   for (const [slice, metrics] of Object.entries(result.slices)) for (const [key, value] of Object.entries(metrics)) if (value.regressed) rows.push([`${slice} / ${key}`, value.baseline, value.candidate, value.delta, "Regressed"]);
   table(container, ["Metric / slice", "Baseline", "Candidate", "Delta", "Review"], rows); $("comparison").replaceChildren(summary, container);

@@ -10,5 +10,6 @@
 .evaluation-shell td,.evaluation-shell th{font-size:13px;vertical-align:top}.evaluation-shell td{overflow-wrap:anywhere;max-width:380px}.evaluation-shell .table-wrap{max-height:420px;overflow:auto}.evaluation-shell th{position:sticky;top:0;background:var(--surface);z-index:1}
 .pass{color:var(--ok)}.blocked,.error{color:var(--bad)}.evaluation-shell .badge{white-space:normal}.evaluation-shell .compact{padding:7px 10px;font-size:12px;min-height:34px}
 #notice{margin-bottom:0}#trajectory svg{width:100%;height:300px;display:block;border:1px solid var(--line-soft);background:var(--bg-alt)}.trajectory-caption{font:12px monospace;color:var(--muted)}
-#comparison{margin-top:16px}#comparison>p{font-weight:600}.defect-editor{min-width:230px}.defect-editor textarea{min-height:60px}.defect-editor select{width:100%}
-@media(max-width:900px){.evaluation-shell{grid-template-columns:1fr}.evaluation-shell .panel{grid-column:1/-1}.evaluation-shell .topbar{align-items:start;gap:18px;flex-direction:column}.metric-cards{grid-template-columns:repeat(2,1fr)}}
+#comparison{margin-top:16px;min-width:0;max-width:100%}#comparison>p{font-weight:600}.defect-editor{min-width:230px}.defect-editor textarea{min-height:60px}.defect-editor select{width:100%}
+.metric-card{min-width:0}.metric-card strong{overflow-wrap:anywhere}.evaluation-shell .table-wrap{max-width:100%}
+@media(max-width:900px){.evaluation-shell{grid-template-columns:minmax(0,1fr)}.evaluation-shell .panel{grid-column:1/-1}.evaluation-shell .topbar{align-items:start;gap:18px;flex-direction:column}.metric-cards{grid-template-columns:repeat(2,minmax(0,1fr))}.metric-card strong{font-size:clamp(17px,4vw,27px)}}
