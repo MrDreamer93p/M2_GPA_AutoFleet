@@ -339,7 +339,7 @@
       "wall_time_s": 0.27
     }
   ],
-  "limitations": "Reference controller verification; results describe these deterministic software scenarios, not production vehicle performance.",
+  "limitations": "Reference controller verification in controlled software scenarios; the report separates harness completion from controller acceptance.",
   "map": "Town10HD_Opt",
   "settling_ticks": 20,
   "engine_version": "1.2.0",
