@@ -29,9 +29,11 @@ Docker alternative: `docker compose -f infra/compose.yml --profile evaluation up
 The normal fleet backend serves the same `/api/v1/evaluation/*` endpoints.
 
 See [input contracts, adapters, metrics and operation](./docs/algorithm-evaluation.md).
-The optional CARLA collector requires a running, matching CARLA server; it has not
-been executed against a real simulator in this change. HIL, road tests, NCAP/SOTIF
-validation and production algorithm improvements are not claimed.
+The CARLA collector requires a running, matching server. Live CARLA 0.9.16 runs
+in Town10HD_Opt have exercised following, cut-in, pedestrian and parking scenarios;
+real OpenCV detector outputs were also evaluated against three MTID annotation
+streams. See [execution evidence](./docs/test-evidence/algorithm-evaluation/README.md).
+HIL, road tests and NCAP/SOTIF validation require their own environments.
 
 This repository now includes:
 

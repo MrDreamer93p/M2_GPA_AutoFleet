@@ -13,7 +13,7 @@ trajectory overlays and failure samples, exports reports and records defect revi
 | Perception evaluation | Class-aware confidence-ranked matching, AP at a configured IoU, precision/recall/F1, slices and FP/FN samples | Requires independent annotations; no detector is trained here |
 | Planning and parking evaluation | ADE/FDE, corridor deviation, acceleration/jerk, sampled-disc collision and constant-velocity TTC, final pose errors | Not a vehicle dynamics or safety certification model |
 | Replay integration | Existing pixel-xywh tracks converted to normalized evaluation input | MTID annotations are truth; independently generated detector outputs are required |
-| Software-in-loop input | Optional fixed-step synchronous CARLA collector and replaceable controller | External CARLA execution was not performed for this change |
+| Software-in-loop input | Fixed-step synchronous CARLA collector and replaceable controller | Live CARLA 0.9.16 / Town10HD_Opt execution recorded for four scenario types |
 | Reports and defects | Immutable inputs/reports, hashes, HTML/CSV exports, recurrence and review history | Marking a defect resolved never changes the original score |
 | Continuous checks | pytest, Python compilation, JS syntax and Compose configuration on GitHub Actions | No model benchmark, load experiment or hardware test |
 
@@ -97,9 +97,12 @@ as release decisions. Tags are selection predicates, not proof of scenario cover
 The existing `tools/generate_highway_vehicle_tracks.py` is an OpenCV Darknet
 inference entry point. Its new outputs declare detector source and weights SHA-256.
 Run it on the **same video** used for the annotations, with your locally available
-model config, weights and names. Nothing downloads or executes a model implicitly.
+model config, weights and names. Install `requirements-perception.txt` for this
+entry point: OpenCV 5 no longer provides `readNetFromDarknet`, so this environment
+pins the verified OpenCV 4.11 implementation. Nothing downloads or executes a model implicitly.
 
 ```powershell
+python -m pip install -r requirements-perception.txt
 python tools/generate_highway_vehicle_tracks.py --video frontend/assets/mtid/mtid-r1-infrastructure-0.mp4 --output data/results/r1-predictions.json
 python tools/evaluate_algorithms.py import-tracks --truth frontend/assets/mtid/mtid-r1-infrastructure-0-tracks.json --predictions data/results/r1-predictions.json --scenario-id mtid_r1 --suite-version mtid-v1 --candidate-version yolov4-tiny-local --dataset-id mtid-infra-0 --revision local-clip-v1 --output data/results/mtid-input.json
 python tools/evaluate_algorithms.py run data/results/mtid-input.json --output data/results/mtid-report.json --html data/results/mtid-report.html --failures-csv data/results/mtid-failures.csv
@@ -139,14 +142,23 @@ comes from world transforms and velocities. The adapter samples actor geometry,
 does not synthesize detection predictions and does not replace the existing video
 worker. External perception evaluations enter through the independent label path.
 
+Install `requirements-carla.txt` to match the verified 0.9.16 server/client pair.
+Before sampling, the collector applies the brake and advances `settling_ticks`
+(default 20, range 1–200). This publishes newly spawned actors into CARLA's cached
+snapshot and lets the vehicle settle; the reference timeline still starts at zero
+after this initialization. A live integration run exposed the origin-valued first
+snapshot defect, which is now covered by a regression test.
+
 The adapter refuses a mismatched map rather than silently loading a different
 world; uses one synchronous fixed-step client; restores weather/world settings
 and removes only the actors it created, including on controller failure. Run with
 exclusive ownership of a dedicated server; start/reset the environment for each
 candidate. Scenario seed is recorded; no Traffic Manager or random actor process
 is started here. Different server/client/physics settings may change results.
-The CARLA unit tests use a controllable fake world to check lifecycle and schema;
-they are not proof of real CARLA execution or deterministic physics.
+The CARLA unit tests use a controllable fake world to check lifecycle and schema.
+Separately, [live execution evidence](test-evidence/algorithm-evaluation/README.md)
+records the actual 0.9.16 server, four scenarios, full trajectory coverage,
+environment restoration, actor cleanup and scoring outcomes.
 
 Official references: [synchronous mode and timestep](https://carla.readthedocs.io/en/latest/adv_synchrony_timestep/),
 [CARLA Python API](https://carla.readthedocs.io/en/latest/python_api/),
@@ -157,7 +169,7 @@ Official references: [synchronous mode and timestep](https://carla.readthedocs.i
 | Method / route under `/api/v1/evaluation` | Purpose |
 | --- | --- |
 | `GET /health`, `GET /example` | Readiness and a synthetic schema fixture |
-| `POST /runs` | Validate, evaluate and atomically persist an immutable run |
+| `POST /runs` | Validate, evaluate and atomically persist an immutable run; failed metric gates also become traceable failure records |
 | `GET /runs`, `GET /runs/{id}` | Recent runs and full report |
 | `GET /runs/{id}/input` | Exact validated input used to calculate the result |
 | `GET /runs/{id}/report.html`, `/failures.csv` | Escaped standalone report and spreadsheet-safe failure export |
@@ -190,6 +202,6 @@ node --check frontend/evaluation.js
 docker compose -f infra/compose.yml --profile evaluation config --quiet
 ```
 
-These are correctness and integration checks against explicit synthetic fixtures,
-not effectiveness experiments. No real CARLA, detector benchmarking, HIL or
-performance experiment is required by CI or claimed by the implementation.
+CI uses explicit correctness fixtures and needs no CARLA installation or model
+download. Manual execution evidence additionally records real MTID inference and
+live CARLA integration. HIL and real-road validation are separate activities.

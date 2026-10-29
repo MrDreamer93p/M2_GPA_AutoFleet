@@ -86,3 +86,36 @@ def test_repeated_collection_uses_stable_scenario_actor_identity():
     reports = [evaluate(collect(data, lambda state: {'brake': 1}, client=NS(get_world=lambda: world),
                                 carla_module=FakeCarla, candidate_version=str(i))) for i in range(2)]
     assert reports[0]['truth_digest'] == reports[1]['truth_digest']
+
+
+def test_collector_primes_new_actor_snapshot_before_first_sample():
+    from autofleet_evaluation.carla_adapter import collect
+    class CachedWorld(World):
+        primed = False
+        def try_spawn_actor(self, blueprint, transform):
+            actor = super().try_spawn_actor(blueprint, transform)
+            actor.get_transform = lambda: transform if self.primed else FakeCarla.Transform(FakeCarla.Location(), FakeCarla.Rotation())
+            return actor
+        def tick(self):
+            self.primed = True
+            return super().tick()
+    world = CachedWorld(); data = scenario()
+    for p in data['trajectory']['reference']: p['x_m'] += 10; p['y_m'] = 5
+    result = collect(data, lambda state: {'brake': 1}, client=NS(get_world=lambda: world),
+                     carla_module=FakeCarla, candidate_version='fixture')
+    first = result.trajectories[0].samples[0]
+    assert first.x_m == 10 and first.y_m == 5
+
+
+def test_vehicle_settles_before_reference_timeline_begins():
+    from autofleet_evaluation.carla_adapter import collect
+    class CountingWorld(World):
+        ticks = 0
+        def tick(self):
+            self.ticks += 1
+            return super().tick()
+    world = CountingWorld(); data = scenario(); data['settling_ticks'] = 20
+    result = collect(data, lambda state: {'brake': 1}, client=NS(get_world=lambda: world),
+                     carla_module=FakeCarla, candidate_version='fixture')
+    assert world.ticks == 20 + len(data['trajectory']['reference']) - 1
+    assert result.trajectories[0].samples[0].t_s == 0

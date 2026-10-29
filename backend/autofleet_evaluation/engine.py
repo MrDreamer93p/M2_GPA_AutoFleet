@@ -69,4 +69,14 @@ def evaluate(dataset: EvaluationInput):
     report['gate'] = {'passed': bool(dataset.gates) and all(c['status'] == 'passed' for c in checks),
                       'status': ('passed' if all(c['status'] == 'passed' for c in checks) else 'blocked') if checks else 'unconfigured',
                       'checks': checks}
+    for check in checks:
+        if check['status'] != 'failed':
+            continue
+        scenario_id = scenario_ids[0] if len(scenario_ids) == 1 else 'suite'
+        if check['metric'].startswith('slices.scenario:'):
+            scenario_id = check['metric'].split('.')[1].removeprefix('scenario:')
+        report['failures'].append({'scenario_id': scenario_id, 'frame_id': f'gate:{check["metric"]}',
+                                   'reason': 'metric_gate_failed', 'label': check['metric'], 'object_index': 0,
+                                   'metric': check['metric'], 'actual': check['actual'], 'op': check['op'],
+                                   'threshold': check['value'], 'tags': []})
     return report

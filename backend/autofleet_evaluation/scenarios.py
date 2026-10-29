@@ -38,7 +38,7 @@ def materialize(catalog, scenario_id, overrides=None):
     if case['kind'] == 'parking': ref[-1]['speed_mps'] = 0
     return {'schema': 'autofleet.scenario.v1', 'status': 'scenario_definition_not_execution',
             'scenario_id': scenario_id, 'suite_version': catalog['version'], 'map': case['map'],
-            'seed': case['seed'], 'weather': case['weather'], 'dt_s': dt,
+            'seed': case['seed'], 'weather': case['weather'], 'dt_s': dt, 'settling_ticks': 20,
             'ego_blueprint': 'vehicle.tesla.model3', 'spawn_z_m': params['spawn_z_m'],
             'actors': case['actors'],
             'trajectory': {'scenario_id': scenario_id, 'kind': case['kind'], 'tags': case['tags'], 'reference': ref,

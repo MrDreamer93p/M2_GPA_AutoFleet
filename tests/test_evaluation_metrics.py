@@ -164,3 +164,15 @@ def test_observed_no_future_contact_is_safe_and_not_a_ttc_regression():
     assert b['planning']['ttc_status'] == 'no_contact' and b['gate']['passed']
     assert not compare_reports(a, b)['metrics']['planning.min_ttc_s']['regressed']
     assert compare_reports(b, a)['metrics']['planning.min_ttc_s']['regressed']
+
+
+def test_failed_metric_gate_creates_traceable_failure_evidence():
+    d = trajectory_input(); t = d['trajectories'][0]
+    t['kind'] = 'driving'; t['corridor_half_width_m'] = 10
+    for p in t['samples']: p['y_m'] = 2
+    d['gates'] = [{'metric': 'planning.fde_m', 'op': '<=', 'value': 1}]
+    r = score(d)
+    assert not r['gate']['passed']
+    failure = next(f for f in r['failures'] if f['reason'] == 'metric_gate_failed')
+    assert failure['metric'] == 'planning.fde_m' and failure['actual'] == 2
+    assert failure['threshold'] == 1

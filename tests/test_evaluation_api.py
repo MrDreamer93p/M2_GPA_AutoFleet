@@ -99,3 +99,19 @@ def test_update_old_defect_is_not_limited_to_latest_listing(tmp_path):
     result = store.update_defect('0', 'resolved', 'old defect reviewed')
     assert result['defect_id'] == '0' and result['status'] == 'resolved'
     assert result['history'][0]['note'] == 'old defect reviewed'
+
+
+def test_parallel_run_persistence_keeps_defect_occurrences_atomic(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from autofleet_evaluation.models import EvaluationInput
+    from autofleet_evaluation.store import EvaluationStore
+    store = EvaluationStore(tmp_path/'db')
+    data = image_input(); data['frames'][0]['predictions'] = []
+    dataset = EvaluationInput.model_validate(data)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        reports = list(pool.map(lambda _: store.create_run(dataset), range(8)))
+    assert len({r['run_id'] for r in reports}) == 8
+    defect = store.defects()[0]
+    assert defect['occurrences'] == 8 and len(defect['history']) == 8
+    for report in reports:
+        assert store.get_run(report['run_id']) == report

@@ -1,0 +1,2 @@
+# Match the portable CARLA server used for live integration verification.
+carla==0.9.16

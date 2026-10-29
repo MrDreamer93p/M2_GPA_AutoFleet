@@ -66,6 +66,9 @@ def collect(scenario, controller, *, candidate_version, client=None, carla_modul
     dt = scenario['dt_s']
     if not isinstance(dt, (int, float)) or not math.isfinite(dt) or not .01 <= dt <= .1:
         raise ValueError('CARLA fixed timestep must be 0.01-0.1 seconds')
+    settling_ticks = scenario.get('settling_ticks', 20)
+    if not isinstance(settling_ticks, int) or isinstance(settling_ticks, bool) or not 1 <= settling_ticks <= 200:
+        raise ValueError('settling_ticks must be an integer from 1 to 200')
     reference = scenario['trajectory']['reference']
     # Validate geometry, lengths and ordering before touching the server.
     Trajectory.model_validate({**scenario['trajectory'], 'samples': reference})
@@ -95,6 +98,11 @@ def collect(scenario, controller, *, candidate_version, client=None, carla_modul
         ego = spawn(scenario['ego_blueprint'], start['x_m'], start['y_m'], start['yaw_rad'])
         for spec in scenario['actors']:
             npcs.append((spawn(spec['blueprint'], spec['x_m'], spec['y_m'], spec['yaw_rad']), spec))
+        # CARLA getters read the last client snapshot. New actors otherwise appear
+        # at the origin until the first tick, creating false collisions/departures.
+        ego.apply_control(carla.VehicleControl(brake=1.0))
+        for _ in range(settling_ticks):
+            world.tick()
         for index, ref in enumerate(reference):
             current = pose(ego, ref['t_s']); current['obstacles'] = []
             for npc_index, (actor, _) in enumerate(npcs):
@@ -121,7 +129,8 @@ def collect(scenario, controller, *, candidate_version, client=None, carla_modul
         trajectory = {**scenario['trajectory'], 'samples': samples, 'ego_radius_m': math.hypot(ext.x, ext.y)}
         return EvaluationInput.model_validate({'schema': 'autofleet.evaluation.v1', 'suite_version': scenario['suite_version'],
                                                'candidate_version': candidate_version,
-                                               'source': {'kind': 'carla', 'dataset': scenario['scenario_id'], 'revision': digest(scenario),
+                                               'source': {'kind': 'carla', 'dataset': scenario['scenario_id'],
+                                                          'revision': digest({**scenario, 'settling_ticks': settling_ticks, 'collector_version': '1.1'}),
                                                           'prediction_source': getattr(controller, '__qualname__', 'controller')},
                                                'trajectories': [trajectory], 'gates': scenario['gates']})
     finally:

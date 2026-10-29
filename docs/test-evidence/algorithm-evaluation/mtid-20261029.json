@@ -1,0 +1,1703 @@
+{
+  "scope": "MTID vehicle-superclass detection, 3 clips x 180 frames, independent Darknet inference and MTID annotations",
+  "taxonomy": {
+    "Car": "vehicle",
+    "Van": "vehicle",
+    "Lorry": "vehicle",
+    "Bus": "vehicle",
+    "car": "vehicle",
+    "truck": "vehicle",
+    "bus": "vehicle",
+    "motorbike": "vehicle",
+    "motorcycle": "vehicle"
+  },
+  "truth_sources": {
+    "mtid-r1-infrastructure-0": "7ea307db1634b4587ba109a709f58df5044a31721e00aaa262b0666bdc0274b6",
+    "mtid-r2-drone-0": "0282ade8a46ebcfb1474a1cf69afeca0cf1434ac676306415553e44e90de7cc0",
+    "mtid-r3-infrastructure-1000": "09c122c2306b41a81b81f44e258acb07cfec6cf2c4915032c725be926554df38"
+  },
+  "counts": {
+    "mtid-r1-infrastructure-0": {
+      "frames": 180,
+      "ground_truth": 1323
+    },
+    "mtid-r2-drone-0": {
+      "frames": 180,
+      "ground_truth": 2889
+    },
+    "mtid-r3-infrastructure-1000": {
+      "frames": 180,
+      "ground_truth": 474
+    }
+  },
+  "engine": "1.2.0",
+  "model_sources": {
+    "yolov4-tiny.cfg": {
+      "url": "https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/yolov4-tiny.cfg",
+      "bytes": 3231,
+      "sha256": "f858e3724962eedf3ac44e3b6cb3f0c3d9ed067c306bb831f539c578b924c90e"
+    },
+    "coco.names": {
+      "url": "https://raw.githubusercontent.com/AlexeyAB/darknet/master/data/coco.names",
+      "bytes": 625,
+      "sha256": "634a1132eb33f8091d60f2c346ababe8b905ae08387037aed883953b7329af84"
+    },
+    "yolov4-tiny.weights": {
+      "url": "https://github.com/AlexeyAB/darknet/releases/download/yolov4/yolov4-tiny.weights",
+      "bytes": 24251276,
+      "sha256": "cf9fbfd0f6d4869b35762f56100f50ed05268084078805f0e7989efe5bb8ca87"
+    }
+  },
+  "candidates": [
+    {
+      "candidate_version": "yolov4-tiny-score018",
+      "run_id": "eaa9e0e942664cc28a565d87abded241",
+      "input_digest": "54239888e9f57d93ad34d14837aa62d9cbe9f6f9f4ba36b33680ae4ef1ba88b4",
+      "truth_digest": "e59d8eed86d5633241848bc3ee71261d1b966ebfa9deecd9d51f2b7ebf99d93a",
+      "policy_digest": "6302000867d241c32d49f5c946e0f8691a505a0dc18cdfd5fe21f3aa0cc4fc34",
+      "perception": {
+        "frames": 540,
+        "labelled_frames": 540,
+        "unlabelled_frames": 0,
+        "ground_truth_count": 4686,
+        "tp": 1539,
+        "fp": 692,
+        "fn": 3147,
+        "precision": 0.6898251904975348,
+        "recall": 0.32842509603072984,
+        "f1": 0.44499060286251263,
+        "map_at_iou": 0.26581312300198257,
+        "map50": 0.26581312300198257,
+        "iou_threshold": 0.5,
+        "score_threshold": 0,
+        "per_class": {
+          "vehicle": {
+            "tp": 1539,
+            "fp": 692,
+            "fn": 3147,
+            "ground_truth_count": 4686,
+            "precision": 0.6898251904975348,
+            "recall": 0.32842509603072984,
+            "ap_at_iou": 0.26581312300198257,
+            "ap50": 0.26581312300198257
+          }
+        }
+      },
+      "gate": {
+        "passed": false,
+        "status": "blocked",
+        "checks": [
+          {
+            "metric": "perception.precision",
+            "op": ">=",
+            "value": 0.9,
+            "actual": 0.6898251904975348,
+            "status": "failed"
+          },
+          {
+            "metric": "perception.recall",
+            "op": ">=",
+            "value": 0.9,
+            "actual": 0.32842509603072984,
+            "status": "failed"
+          }
+        ]
+      }
+    },
+    {
+      "candidate_version": "yolov4-tiny-score035",
+      "run_id": "5f75c5c0b53e4a1cb84ac77b3dfebf7c",
+      "input_digest": "5ef01c94271de667e595ab70864f4e8cc7d93ddd066d08c427372e4c8bd1f473",
+      "truth_digest": "e59d8eed86d5633241848bc3ee71261d1b966ebfa9deecd9d51f2b7ebf99d93a",
+      "policy_digest": "6302000867d241c32d49f5c946e0f8691a505a0dc18cdfd5fe21f3aa0cc4fc34",
+      "perception": {
+        "frames": 540,
+        "labelled_frames": 540,
+        "unlabelled_frames": 0,
+        "ground_truth_count": 4686,
+        "tp": 889,
+        "fp": 271,
+        "fn": 3797,
+        "precision": 0.7663793103448275,
+        "recall": 0.1897140418267179,
+        "f1": 0.30413958262059526,
+        "map_at_iou": 0.16545431797623533,
+        "map50": 0.16545431797623533,
+        "iou_threshold": 0.5,
+        "score_threshold": 0,
+        "per_class": {
+          "vehicle": {
+            "tp": 889,
+            "fp": 271,
+            "fn": 3797,
+            "ground_truth_count": 4686,
+            "precision": 0.7663793103448275,
+            "recall": 0.1897140418267179,
+            "ap_at_iou": 0.16545431797623533,
+            "ap50": 0.16545431797623533
+          }
+        }
+      },
+      "gate": {
+        "passed": false,
+        "status": "blocked",
+        "checks": [
+          {
+            "metric": "perception.precision",
+            "op": ">=",
+            "value": 0.9,
+            "actual": 0.7663793103448275,
+            "status": "failed"
+          },
+          {
+            "metric": "perception.recall",
+            "op": ">=",
+            "value": 0.9,
+            "actual": 0.1897140418267179,
+            "status": "failed"
+          }
+        ]
+      }
+    }
+  ],
+  "comparison": {
+    "baseline": "eaa9e0e942664cc28a565d87abded241",
+    "candidate": "5f75c5c0b53e4a1cb84ac77b3dfebf7c",
+    "metrics": {
+      "perception.f1": {
+        "baseline": 0.44499060286251263,
+        "candidate": 0.30413958262059526,
+        "delta": -0.14085102024191737,
+        "regressed": true
+      },
+      "perception.fn": {
+        "baseline": 3147,
+        "candidate": 3797,
+        "delta": 650,
+        "regressed": false
+      },
+      "perception.fp": {
+        "baseline": 692,
+        "candidate": 271,
+        "delta": -421,
+        "regressed": false
+      },
+      "perception.frames": {
+        "baseline": 540,
+        "candidate": 540,
+        "delta": 0,
+        "regressed": false
+      },
+      "perception.ground_truth_count": {
+        "baseline": 4686,
+        "candidate": 4686,
+        "delta": 0,
+        "regressed": false
+      },
+      "perception.iou_threshold": {
+        "baseline": 0.5,
+        "candidate": 0.5,
+        "delta": 0.0,
+        "regressed": false
+      },
+      "perception.labelled_frames": {
+        "baseline": 540,
+        "candidate": 540,
+        "delta": 0,
+        "regressed": false
+      },
+      "perception.map50": {
+        "baseline": 0.26581312300198257,
+        "candidate": 0.16545431797623533,
+        "delta": -0.10035880502574723,
+        "regressed": true
+      },
+      "perception.map_at_iou": {
+        "baseline": 0.26581312300198257,
+        "candidate": 0.16545431797623533,
+        "delta": -0.10035880502574723,
+        "regressed": true
+      },
+      "perception.precision": {
+        "baseline": 0.6898251904975348,
+        "candidate": 0.7663793103448275,
+        "delta": 0.07655411984729277,
+        "regressed": false
+      },
+      "perception.recall": {
+        "baseline": 0.32842509603072984,
+        "candidate": 0.1897140418267179,
+        "delta": -0.13871105420401195,
+        "regressed": true
+      },
+      "perception.score_threshold": {
+        "baseline": 0,
+        "candidate": 0,
+        "delta": 0,
+        "regressed": false
+      },
+      "perception.tp": {
+        "baseline": 1539,
+        "candidate": 889,
+        "delta": -650,
+        "regressed": false
+      },
+      "perception.unlabelled_frames": {
+        "baseline": 0,
+        "candidate": 0,
+        "delta": 0,
+        "regressed": false
+      },
+      "planning.ade_m": {
+        "baseline": null,
+        "candidate": null,
+        "delta": null,
+        "regressed": false
+      },
+      "planning.collision_observation_coverage": {
+        "baseline": null,
+        "candidate": null,
+        "delta": null,
+        "regressed": false
+      },
+      "planning.collision_scenarios": {
+        "baseline": null,
+        "candidate": null,
+        "delta": null,
+        "regressed": false
+      },
+      "planning.coverage": {
+        "baseline": null,
+        "candidate": null,
+        "delta": null,
+        "regressed": false
+      },
+      "planning.fde_m": {
+        "baseline": null,
+        "candidate": null,
+        "delta": null,
+        "regressed": false
+      },
+      "planning.lane_departure_samples": {
+        "baseline": null,
+        "candidate": null,
+        "delta": null,
+        "regressed": false
+      },
+      "planning.max_abs_acceleration_mps2": {
+        "baseline": null,
+        "candidate": null,
+        "delta": null,
+        "regressed": false
+      },
+      "planning.max_abs_jerk_mps3": {
+        "baseline": null,
+        "candidate": null,
+        "delta": null,
+        "regressed": false
+      },
+      "planning.max_cross_track_m": {
+        "baseline": null,
+        "candidate": null,
+        "delta": null,
+        "regressed": false
+      },
+      "planning.min_clearance_m": {
+        "baseline": null,
+        "candidate": null,
+        "delta": null,
+        "regressed": false,
+        "baseline_status": "unavailable",
+        "candidate_status": "unavailable"
+      },
+      "planning.min_ttc_s": {
+        "baseline": null,
+        "candidate": null,
+        "delta": null,
+        "regressed": false,
+        "baseline_status": "unavailable",
+        "candidate_status": "unavailable"
+      },
+      "planning.obstacle_observation_coverage": {
+        "baseline": null,
+        "candidate": null,
+        "delta": null,
+        "regressed": false
+      },
+      "planning.parking_heading_error_rad": {
+        "baseline": null,
+        "candidate": null,
+        "delta": null,
+        "regressed": false
+      },
+      "planning.parking_position_error_m": {
+        "baseline": null,
+        "candidate": null,
+        "delta": null,
+        "regressed": false
+      },
+      "planning.parking_success_rate": {
+        "baseline": null,
+        "candidate": null,
+        "delta": null,
+        "regressed": false
+      },
+      "planning.scenarios": {
+        "baseline": 0,
+        "candidate": 0,
+        "delta": 0,
+        "regressed": false
+      }
+    },
+    "slices": {
+      "scenario:mtid_r1": {
+        "perception.f1": {
+          "baseline": 0.2488425925925926,
+          "candidate": 0.22036082474226804,
+          "delta": -0.028481767850324552,
+          "regressed": true
+        },
+        "perception.fn": {
+          "baseline": 1108,
+          "candidate": 1152,
+          "delta": 44,
+          "regressed": false
+        },
+        "perception.fp": {
+          "baseline": 190,
+          "candidate": 58,
+          "delta": -132,
+          "regressed": false
+        },
+        "perception.frames": {
+          "baseline": 180,
+          "candidate": 180,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.ground_truth_count": {
+          "baseline": 1323,
+          "candidate": 1323,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.iou_threshold": {
+          "baseline": 0.5,
+          "candidate": 0.5,
+          "delta": 0.0,
+          "regressed": false
+        },
+        "perception.labelled_frames": {
+          "baseline": 180,
+          "candidate": 180,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.map50": {
+          "baseline": 0.1460800054157439,
+          "candidate": 0.12624412235854476,
+          "delta": -0.019835883057199133,
+          "regressed": true
+        },
+        "perception.map_at_iou": {
+          "baseline": 0.1460800054157439,
+          "candidate": 0.12624412235854476,
+          "delta": -0.019835883057199133,
+          "regressed": true
+        },
+        "perception.precision": {
+          "baseline": 0.5308641975308642,
+          "candidate": 0.7467248908296943,
+          "delta": 0.21586069329883006,
+          "regressed": false
+        },
+        "perception.recall": {
+          "baseline": 0.16250944822373395,
+          "candidate": 0.1292517006802721,
+          "delta": -0.033257747543461835,
+          "regressed": true
+        },
+        "perception.score_threshold": {
+          "baseline": 0,
+          "candidate": 0,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.tp": {
+          "baseline": 215,
+          "candidate": 171,
+          "delta": -44,
+          "regressed": false
+        },
+        "perception.unlabelled_frames": {
+          "baseline": 0,
+          "candidate": 0,
+          "delta": 0,
+          "regressed": false
+        },
+        "planning.ade_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.collision_observation_coverage": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.collision_scenarios": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.coverage": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.fde_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.lane_departure_samples": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.max_abs_acceleration_mps2": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.max_abs_jerk_mps3": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.max_cross_track_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.min_clearance_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false,
+          "baseline_status": "unavailable",
+          "candidate_status": "unavailable"
+        },
+        "planning.min_ttc_s": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false,
+          "baseline_status": "unavailable",
+          "candidate_status": "unavailable"
+        },
+        "planning.obstacle_observation_coverage": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.parking_heading_error_rad": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.parking_position_error_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.parking_success_rate": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.scenarios": {
+          "baseline": 0,
+          "candidate": 0,
+          "delta": 0,
+          "regressed": false
+        }
+      },
+      "scenario:mtid_r2": {
+        "perception.f1": {
+          "baseline": 0.5574725520950033,
+          "candidate": 0.35452793834296725,
+          "delta": -0.2029446137520361,
+          "regressed": true
+        },
+        "perception.fn": {
+          "baseline": 1645,
+          "candidate": 2245,
+          "delta": 600,
+          "regressed": false
+        },
+        "perception.fp": {
+          "baseline": 330,
+          "candidate": 100,
+          "delta": -230,
+          "regressed": false
+        },
+        "perception.frames": {
+          "baseline": 180,
+          "candidate": 180,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.ground_truth_count": {
+          "baseline": 2889,
+          "candidate": 2889,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.iou_threshold": {
+          "baseline": 0.5,
+          "candidate": 0.5,
+          "delta": 0.0,
+          "regressed": false
+        },
+        "perception.labelled_frames": {
+          "baseline": 180,
+          "candidate": 180,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.map50": {
+          "baseline": 0.3695132909310194,
+          "candidate": 0.1939104055834397,
+          "delta": -0.17560288534757973,
+          "regressed": true
+        },
+        "perception.map_at_iou": {
+          "baseline": 0.3695132909310194,
+          "candidate": 0.1939104055834397,
+          "delta": -0.17560288534757973,
+          "regressed": true
+        },
+        "perception.precision": {
+          "baseline": 0.7903430749682337,
+          "candidate": 0.8655913978494624,
+          "delta": 0.07524832288122862,
+          "regressed": false
+        },
+        "perception.recall": {
+          "baseline": 0.4305988231221876,
+          "candidate": 0.22291450328833506,
+          "delta": -0.20768431983385255,
+          "regressed": true
+        },
+        "perception.score_threshold": {
+          "baseline": 0,
+          "candidate": 0,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.tp": {
+          "baseline": 1244,
+          "candidate": 644,
+          "delta": -600,
+          "regressed": false
+        },
+        "perception.unlabelled_frames": {
+          "baseline": 0,
+          "candidate": 0,
+          "delta": 0,
+          "regressed": false
+        },
+        "planning.ade_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.collision_observation_coverage": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.collision_scenarios": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.coverage": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.fde_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.lane_departure_samples": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.max_abs_acceleration_mps2": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.max_abs_jerk_mps3": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.max_cross_track_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.min_clearance_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false,
+          "baseline_status": "unavailable",
+          "candidate_status": "unavailable"
+        },
+        "planning.min_ttc_s": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false,
+          "baseline_status": "unavailable",
+          "candidate_status": "unavailable"
+        },
+        "planning.obstacle_observation_coverage": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.parking_heading_error_rad": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.parking_position_error_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.parking_success_rate": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.scenarios": {
+          "baseline": 0,
+          "candidate": 0,
+          "delta": 0,
+          "regressed": false
+        }
+      },
+      "scenario:mtid_r3": {
+        "perception.f1": {
+          "baseline": 0.22038567493112948,
+          "candidate": 0.22390317700453857,
+          "delta": 0.00351750207340909,
+          "regressed": false
+        },
+        "perception.fn": {
+          "baseline": 394,
+          "candidate": 400,
+          "delta": 6,
+          "regressed": false
+        },
+        "perception.fp": {
+          "baseline": 172,
+          "candidate": 113,
+          "delta": -59,
+          "regressed": false
+        },
+        "perception.frames": {
+          "baseline": 180,
+          "candidate": 180,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.ground_truth_count": {
+          "baseline": 474,
+          "candidate": 474,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.iou_threshold": {
+          "baseline": 0.5,
+          "candidate": 0.5,
+          "delta": 0.0,
+          "regressed": false
+        },
+        "perception.labelled_frames": {
+          "baseline": 180,
+          "candidate": 180,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.map50": {
+          "baseline": 0.15278539006157227,
+          "candidate": 0.14842414294797757,
+          "delta": -0.004361247113594702,
+          "regressed": true
+        },
+        "perception.map_at_iou": {
+          "baseline": 0.15278539006157227,
+          "candidate": 0.14842414294797757,
+          "delta": -0.004361247113594702,
+          "regressed": true
+        },
+        "perception.precision": {
+          "baseline": 0.31746031746031744,
+          "candidate": 0.39572192513368987,
+          "delta": 0.07826160767337242,
+          "regressed": false
+        },
+        "perception.recall": {
+          "baseline": 0.16877637130801687,
+          "candidate": 0.15611814345991562,
+          "delta": -0.01265822784810125,
+          "regressed": true
+        },
+        "perception.score_threshold": {
+          "baseline": 0,
+          "candidate": 0,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.tp": {
+          "baseline": 80,
+          "candidate": 74,
+          "delta": -6,
+          "regressed": false
+        },
+        "perception.unlabelled_frames": {
+          "baseline": 0,
+          "candidate": 0,
+          "delta": 0,
+          "regressed": false
+        },
+        "planning.ade_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.collision_observation_coverage": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.collision_scenarios": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.coverage": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.fde_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.lane_departure_samples": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.max_abs_acceleration_mps2": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.max_abs_jerk_mps3": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.max_cross_track_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.min_clearance_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false,
+          "baseline_status": "unavailable",
+          "candidate_status": "unavailable"
+        },
+        "planning.min_ttc_s": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false,
+          "baseline_status": "unavailable",
+          "candidate_status": "unavailable"
+        },
+        "planning.obstacle_observation_coverage": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.parking_heading_error_rad": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.parking_position_error_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.parking_success_rate": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.scenarios": {
+          "baseline": 0,
+          "candidate": 0,
+          "delta": 0,
+          "regressed": false
+        }
+      },
+      "tag:day": {
+        "perception.f1": {
+          "baseline": 0.44499060286251263,
+          "candidate": 0.30413958262059526,
+          "delta": -0.14085102024191737,
+          "regressed": true
+        },
+        "perception.fn": {
+          "baseline": 3147,
+          "candidate": 3797,
+          "delta": 650,
+          "regressed": false
+        },
+        "perception.fp": {
+          "baseline": 692,
+          "candidate": 271,
+          "delta": -421,
+          "regressed": false
+        },
+        "perception.frames": {
+          "baseline": 540,
+          "candidate": 540,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.ground_truth_count": {
+          "baseline": 4686,
+          "candidate": 4686,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.iou_threshold": {
+          "baseline": 0.5,
+          "candidate": 0.5,
+          "delta": 0.0,
+          "regressed": false
+        },
+        "perception.labelled_frames": {
+          "baseline": 540,
+          "candidate": 540,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.map50": {
+          "baseline": 0.26581312300198257,
+          "candidate": 0.16545431797623533,
+          "delta": -0.10035880502574723,
+          "regressed": true
+        },
+        "perception.map_at_iou": {
+          "baseline": 0.26581312300198257,
+          "candidate": 0.16545431797623533,
+          "delta": -0.10035880502574723,
+          "regressed": true
+        },
+        "perception.precision": {
+          "baseline": 0.6898251904975348,
+          "candidate": 0.7663793103448275,
+          "delta": 0.07655411984729277,
+          "regressed": false
+        },
+        "perception.recall": {
+          "baseline": 0.32842509603072984,
+          "candidate": 0.1897140418267179,
+          "delta": -0.13871105420401195,
+          "regressed": true
+        },
+        "perception.score_threshold": {
+          "baseline": 0,
+          "candidate": 0,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.tp": {
+          "baseline": 1539,
+          "candidate": 889,
+          "delta": -650,
+          "regressed": false
+        },
+        "perception.unlabelled_frames": {
+          "baseline": 0,
+          "candidate": 0,
+          "delta": 0,
+          "regressed": false
+        },
+        "planning.ade_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.collision_observation_coverage": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.collision_scenarios": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.coverage": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.fde_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.lane_departure_samples": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.max_abs_acceleration_mps2": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.max_abs_jerk_mps3": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.max_cross_track_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.min_clearance_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false,
+          "baseline_status": "unavailable",
+          "candidate_status": "unavailable"
+        },
+        "planning.min_ttc_s": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false,
+          "baseline_status": "unavailable",
+          "candidate_status": "unavailable"
+        },
+        "planning.obstacle_observation_coverage": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.parking_heading_error_rad": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.parking_position_error_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.parking_success_rate": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.scenarios": {
+          "baseline": 0,
+          "candidate": 0,
+          "delta": 0,
+          "regressed": false
+        }
+      },
+      "tag:drone": {
+        "perception.f1": {
+          "baseline": 0.5574725520950033,
+          "candidate": 0.35452793834296725,
+          "delta": -0.2029446137520361,
+          "regressed": true
+        },
+        "perception.fn": {
+          "baseline": 1645,
+          "candidate": 2245,
+          "delta": 600,
+          "regressed": false
+        },
+        "perception.fp": {
+          "baseline": 330,
+          "candidate": 100,
+          "delta": -230,
+          "regressed": false
+        },
+        "perception.frames": {
+          "baseline": 180,
+          "candidate": 180,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.ground_truth_count": {
+          "baseline": 2889,
+          "candidate": 2889,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.iou_threshold": {
+          "baseline": 0.5,
+          "candidate": 0.5,
+          "delta": 0.0,
+          "regressed": false
+        },
+        "perception.labelled_frames": {
+          "baseline": 180,
+          "candidate": 180,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.map50": {
+          "baseline": 0.3695132909310194,
+          "candidate": 0.1939104055834397,
+          "delta": -0.17560288534757973,
+          "regressed": true
+        },
+        "perception.map_at_iou": {
+          "baseline": 0.3695132909310194,
+          "candidate": 0.1939104055834397,
+          "delta": -0.17560288534757973,
+          "regressed": true
+        },
+        "perception.precision": {
+          "baseline": 0.7903430749682337,
+          "candidate": 0.8655913978494624,
+          "delta": 0.07524832288122862,
+          "regressed": false
+        },
+        "perception.recall": {
+          "baseline": 0.4305988231221876,
+          "candidate": 0.22291450328833506,
+          "delta": -0.20768431983385255,
+          "regressed": true
+        },
+        "perception.score_threshold": {
+          "baseline": 0,
+          "candidate": 0,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.tp": {
+          "baseline": 1244,
+          "candidate": 644,
+          "delta": -600,
+          "regressed": false
+        },
+        "perception.unlabelled_frames": {
+          "baseline": 0,
+          "candidate": 0,
+          "delta": 0,
+          "regressed": false
+        },
+        "planning.ade_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.collision_observation_coverage": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.collision_scenarios": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.coverage": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.fde_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.lane_departure_samples": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.max_abs_acceleration_mps2": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.max_abs_jerk_mps3": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.max_cross_track_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.min_clearance_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false,
+          "baseline_status": "unavailable",
+          "candidate_status": "unavailable"
+        },
+        "planning.min_ttc_s": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false,
+          "baseline_status": "unavailable",
+          "candidate_status": "unavailable"
+        },
+        "planning.obstacle_observation_coverage": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.parking_heading_error_rad": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.parking_position_error_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.parking_success_rate": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.scenarios": {
+          "baseline": 0,
+          "candidate": 0,
+          "delta": 0,
+          "regressed": false
+        }
+      },
+      "tag:infrastructure": {
+        "perception.f1": {
+          "baseline": 0.2404237978810106,
+          "candidate": 0.22141888838680523,
+          "delta": -0.019004909494205358,
+          "regressed": true
+        },
+        "perception.fn": {
+          "baseline": 1502,
+          "candidate": 1552,
+          "delta": 50,
+          "regressed": false
+        },
+        "perception.fp": {
+          "baseline": 362,
+          "candidate": 171,
+          "delta": -191,
+          "regressed": false
+        },
+        "perception.frames": {
+          "baseline": 360,
+          "candidate": 360,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.ground_truth_count": {
+          "baseline": 1797,
+          "candidate": 1797,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.iou_threshold": {
+          "baseline": 0.5,
+          "candidate": 0.5,
+          "delta": 0.0,
+          "regressed": false
+        },
+        "perception.labelled_frames": {
+          "baseline": 360,
+          "candidate": 360,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.map50": {
+          "baseline": 0.14238080844153042,
+          "candidate": 0.12864915910075522,
+          "delta": -0.013731649340775198,
+          "regressed": true
+        },
+        "perception.map_at_iou": {
+          "baseline": 0.14238080844153042,
+          "candidate": 0.12864915910075522,
+          "delta": -0.013731649340775198,
+          "regressed": true
+        },
+        "perception.precision": {
+          "baseline": 0.4490106544901065,
+          "candidate": 0.5889423076923077,
+          "delta": 0.1399316532022012,
+          "regressed": false
+        },
+        "perception.recall": {
+          "baseline": 0.16416249304396216,
+          "candidate": 0.13633834168057873,
+          "delta": -0.027824151363383426,
+          "regressed": true
+        },
+        "perception.score_threshold": {
+          "baseline": 0,
+          "candidate": 0,
+          "delta": 0,
+          "regressed": false
+        },
+        "perception.tp": {
+          "baseline": 295,
+          "candidate": 245,
+          "delta": -50,
+          "regressed": false
+        },
+        "perception.unlabelled_frames": {
+          "baseline": 0,
+          "candidate": 0,
+          "delta": 0,
+          "regressed": false
+        },
+        "planning.ade_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.collision_observation_coverage": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.collision_scenarios": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.coverage": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.fde_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.lane_departure_samples": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.max_abs_acceleration_mps2": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.max_abs_jerk_mps3": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.max_cross_track_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.min_clearance_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false,
+          "baseline_status": "unavailable",
+          "candidate_status": "unavailable"
+        },
+        "planning.min_ttc_s": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false,
+          "baseline_status": "unavailable",
+          "candidate_status": "unavailable"
+        },
+        "planning.obstacle_observation_coverage": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.parking_heading_error_rad": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.parking_position_error_m": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.parking_success_rate": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "regressed": false
+        },
+        "planning.scenarios": {
+          "baseline": 0,
+          "candidate": 0,
+          "delta": 0,
+          "regressed": false
+        }
+      }
+    },
+    "regressed_metrics": [
+      "perception.f1",
+      "perception.map50",
+      "perception.map_at_iou",
+      "perception.recall",
+      "scenario:mtid_r1/perception.f1",
+      "scenario:mtid_r1/perception.map50",
+      "scenario:mtid_r1/perception.map_at_iou",
+      "scenario:mtid_r1/perception.recall",
+      "scenario:mtid_r2/perception.f1",
+      "scenario:mtid_r2/perception.map50",
+      "scenario:mtid_r2/perception.map_at_iou",
+      "scenario:mtid_r2/perception.recall",
+      "scenario:mtid_r3/perception.map50",
+      "scenario:mtid_r3/perception.map_at_iou",
+      "scenario:mtid_r3/perception.recall",
+      "tag:day/perception.f1",
+      "tag:day/perception.map50",
+      "tag:day/perception.map_at_iou",
+      "tag:day/perception.recall",
+      "tag:drone/perception.f1",
+      "tag:drone/perception.map50",
+      "tag:drone/perception.map_at_iou",
+      "tag:drone/perception.recall",
+      "tag:infrastructure/perception.f1",
+      "tag:infrastructure/perception.map50",
+      "tag:infrastructure/perception.map_at_iou",
+      "tag:infrastructure/perception.recall"
+    ],
+    "candidate_gate": {
+      "passed": false,
+      "status": "blocked",
+      "checks": [
+        {
+          "metric": "perception.precision",
+          "op": ">=",
+          "value": 0.9,
+          "actual": 0.7663793103448275,
+          "status": "failed"
+        },
+        {
+          "metric": "perception.recall",
+          "op": ">=",
+          "value": 0.9,
+          "actual": 0.1897140418267179,
+          "status": "failed"
+        }
+      ]
+    },
+    "regression_free": false
+  },
+  "executed_at": "2026-10-29",
+  "execution": "Real OpenCV Darknet inference on three existing MTID clips; independent MTID annotations; vehicle superclass.",
+  "versions": {
+    "opencv": "4.11.0",
+    "numpy": "2.2.6",
+    "python": "3.11"
+  },
+  "observation": "Higher score cutoff improved precision but reduced recall/AP; both candidates failed the illustrative 0.9 precision/recall policy.",
+  "per_scenario": {
+    "yolov4-tiny-score018": {
+      "scenario:mtid_r1": {
+        "frames": 180,
+        "labelled_frames": 180,
+        "unlabelled_frames": 0,
+        "ground_truth_count": 1323,
+        "tp": 215,
+        "fp": 190,
+        "fn": 1108,
+        "precision": 0.5308641975308642,
+        "recall": 0.16250944822373395,
+        "f1": 0.2488425925925926,
+        "map_at_iou": 0.1460800054157439,
+        "map50": 0.1460800054157439,
+        "iou_threshold": 0.5,
+        "score_threshold": 0,
+        "per_class": {
+          "vehicle": {
+            "tp": 215,
+            "fp": 190,
+            "fn": 1108,
+            "ground_truth_count": 1323,
+            "precision": 0.5308641975308642,
+            "recall": 0.16250944822373395,
+            "ap_at_iou": 0.1460800054157439,
+            "ap50": 0.1460800054157439
+          }
+        }
+      },
+      "scenario:mtid_r2": {
+        "frames": 180,
+        "labelled_frames": 180,
+        "unlabelled_frames": 0,
+        "ground_truth_count": 2889,
+        "tp": 1244,
+        "fp": 330,
+        "fn": 1645,
+        "precision": 0.7903430749682337,
+        "recall": 0.4305988231221876,
+        "f1": 0.5574725520950033,
+        "map_at_iou": 0.3695132909310194,
+        "map50": 0.3695132909310194,
+        "iou_threshold": 0.5,
+        "score_threshold": 0,
+        "per_class": {
+          "vehicle": {
+            "tp": 1244,
+            "fp": 330,
+            "fn": 1645,
+            "ground_truth_count": 2889,
+            "precision": 0.7903430749682337,
+            "recall": 0.4305988231221876,
+            "ap_at_iou": 0.3695132909310194,
+            "ap50": 0.3695132909310194
+          }
+        }
+      },
+      "scenario:mtid_r3": {
+        "frames": 180,
+        "labelled_frames": 180,
+        "unlabelled_frames": 0,
+        "ground_truth_count": 474,
+        "tp": 80,
+        "fp": 172,
+        "fn": 394,
+        "precision": 0.31746031746031744,
+        "recall": 0.16877637130801687,
+        "f1": 0.22038567493112948,
+        "map_at_iou": 0.15278539006157227,
+        "map50": 0.15278539006157227,
+        "iou_threshold": 0.5,
+        "score_threshold": 0,
+        "per_class": {
+          "vehicle": {
+            "tp": 80,
+            "fp": 172,
+            "fn": 394,
+            "ground_truth_count": 474,
+            "precision": 0.31746031746031744,
+            "recall": 0.16877637130801687,
+            "ap_at_iou": 0.15278539006157227,
+            "ap50": 0.15278539006157227
+          }
+        }
+      }
+    },
+    "yolov4-tiny-score035": {
+      "scenario:mtid_r1": {
+        "frames": 180,
+        "labelled_frames": 180,
+        "unlabelled_frames": 0,
+        "ground_truth_count": 1323,
+        "tp": 171,
+        "fp": 58,
+        "fn": 1152,
+        "precision": 0.7467248908296943,
+        "recall": 0.1292517006802721,
+        "f1": 0.22036082474226804,
+        "map_at_iou": 0.12624412235854476,
+        "map50": 0.12624412235854476,
+        "iou_threshold": 0.5,
+        "score_threshold": 0,
+        "per_class": {
+          "vehicle": {
+            "tp": 171,
+            "fp": 58,
+            "fn": 1152,
+            "ground_truth_count": 1323,
+            "precision": 0.7467248908296943,
+            "recall": 0.1292517006802721,
+            "ap_at_iou": 0.12624412235854476,
+            "ap50": 0.12624412235854476
+          }
+        }
+      },
+      "scenario:mtid_r2": {
+        "frames": 180,
+        "labelled_frames": 180,
+        "unlabelled_frames": 0,
+        "ground_truth_count": 2889,
+        "tp": 644,
+        "fp": 100,
+        "fn": 2245,
+        "precision": 0.8655913978494624,
+        "recall": 0.22291450328833506,
+        "f1": 0.35452793834296725,
+        "map_at_iou": 0.1939104055834397,
+        "map50": 0.1939104055834397,
+        "iou_threshold": 0.5,
+        "score_threshold": 0,
+        "per_class": {
+          "vehicle": {
+            "tp": 644,
+            "fp": 100,
+            "fn": 2245,
+            "ground_truth_count": 2889,
+            "precision": 0.8655913978494624,
+            "recall": 0.22291450328833506,
+            "ap_at_iou": 0.1939104055834397,
+            "ap50": 0.1939104055834397
+          }
+        }
+      },
+      "scenario:mtid_r3": {
+        "frames": 180,
+        "labelled_frames": 180,
+        "unlabelled_frames": 0,
+        "ground_truth_count": 474,
+        "tp": 74,
+        "fp": 113,
+        "fn": 400,
+        "precision": 0.39572192513368987,
+        "recall": 0.15611814345991562,
+        "f1": 0.22390317700453857,
+        "map_at_iou": 0.14842414294797757,
+        "map50": 0.14842414294797757,
+        "iou_threshold": 0.5,
+        "score_threshold": 0,
+        "per_class": {
+          "vehicle": {
+            "tp": 74,
+            "fp": 113,
+            "fn": 400,
+            "ground_truth_count": 474,
+            "precision": 0.39572192513368987,
+            "recall": 0.15611814345991562,
+            "ap_at_iou": 0.14842414294797757,
+            "ap50": 0.14842414294797757
+          }
+        }
+      }
+    }
+  }
+}
